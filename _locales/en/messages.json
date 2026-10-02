@@ -1,0 +1,11 @@
+{
+  "appName": {
+    "message": "Stuđiô — Prototype B2"
+  },
+  "appDescription": {
+    "message": "Tasks, Pomodoro, Eisenhower sorting and optional Gemini help."
+  },
+  "openStudio": {
+    "message": "Open Stuđiô"
+  }
+}
