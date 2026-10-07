@@ -1,9 +1,9 @@
 {
-  "name": "studio-prototype-b2-chrome-extension",
-  "version": "0.14.0",
+  "name": "studio-chrome-extension",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Stu\u0111i\u00f4 functional Prototype B2",
+  "description": "Stu\u0111i\u00f4 — local planning, focus and optional AI assistance",
   "scripts": {
     "test": "node --test tests/*.test.js",
     "check": "node scripts/audit.mjs",

@@ -8,7 +8,7 @@ function duration(ms) {
 
 export function renderTrackingCard(tracking, busy = false) {
   const disabled = busy || !tracking?.available ? "disabled" : "";
-  return html`<section class="card"><p class="eyebrow">Local browser tracking · beta</p><h2>Website time today</h2>
+  return html`<section class="card"><p class="eyebrow">Local browser tracking</p><h2>Website time today</h2>
     <p class="subtle">${tracking?.enabled ? t("On") : t("Off")} · ${duration(tracking?.totalMs)} recorded${tracking?.activeHost ? msg` · Current: ${escapeHtml(tracking.activeHost)}` : ""}</p>
     ${(tracking?.sites ?? []).map(site => html`<div class="setting-row"><span>${escapeHtml(site.host)}</span><strong>${duration(site.ms)}</strong></div>`).join("")}
     <details class="mini-disclosure"><summary>Details</summary><p class="field-help">Active website in the focused browser window; pauses on device idle after 60 seconds. Estimates, not proof of attention. Long sleep gaps are skipped; passive reading/video may be undercounted. Not other apps or total device screen time.</p>
