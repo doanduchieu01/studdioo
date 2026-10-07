@@ -409,6 +409,7 @@ export const vi = {
   "Rounds between long breaks": "Số lượt giữa các lần nghỉ dài",
   "Rule sorted": "Theo quy tắc",
   "Rules first. Gemini sorts unclear tasks while the panel is open. Manual choices stay.": "Dùng quy tắc trước, Gemini xử lý việc chưa rõ khi bảng đang mở. Giữ lựa chọn thủ công.",
+  "Earlier Flash-Lite option": "Lựa chọn Flash-Lite trước đó",
   "Save": "Lưu",
   "Save changes": "Lưu",
   "Save instructions": "Lưu chỉ dẫn",

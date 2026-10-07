@@ -1,6 +1,8 @@
-# Store submission notes for v0.12.0
+# Store submission notes for v0.14.0
 
 This ZIP is an unpacked development release; nothing has been uploaded to Chrome Web Store. Update the public privacy-policy page to reflect `PRIVACY.md` before submitting this version. The previous hostname-only explanation does not describe optional titles/resource IDs, per-site media signals or AI attribution.
+
+The v0.14 redesign adds user-started explanation overlays, an inactive media catalogue, and local AI mode/allowance metadata. Required/optional permissions and host declarations are unchanged. The bulk local shortcut presents a warning and exact selected sites before the native permission prompt; it does not enable AI, sharing, remembered keys or debug text. Existing feature consent stays independent of guide completion. Include the new local metadata behavior and separate automatic-AI mode in the published privacy policy. No Web Store submission or live website update has been performed.
 
 ## Purpose
 
@@ -10,7 +12,7 @@ Stuđiô helps users plan study/work, track estimated browser sessions, review t
 
 | Permission | Justification |
 | --- | --- |
-| `storage` (required) | Keep tasks, timers, settings, local activity/review data and notification state. |
+| `storage` (required) | Keep tasks, timers, settings, local activity/review data, notification state and device-local guide progress. |
 | `sidePanel` (required) | Display the planner, timer, Activity review and settings in Chrome's side panel. |
 | `alarms` (required) | Reconcile timers and opted-in tracking/reminders while the panel is closed. Delivery depends on browser/device availability. |
 | `tabs` (optional) | Read the current normal-tab URL/title after tracking consent; derive hostname and optionally resource identity/title. No history import. |

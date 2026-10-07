@@ -20,7 +20,7 @@ import {
 } from "../src/core/ai-contracts.js";
 
 test("the default model is a suggested Interactions-compatible Flash-Lite model", () => {
-  assert.equal(DEFAULT_MODEL, "gemini-3.1-flash-lite");
+  assert.equal(DEFAULT_MODEL, "gemini-3.5-flash-lite");
   assert.ok(SUGGESTED_MODELS.includes(DEFAULT_MODEL));
 });
 

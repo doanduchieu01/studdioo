@@ -1,4 +1,7 @@
 import { recordAiUsage, COUNTED_AI_ACTIONS } from "./core/ai-usage.js";
+import { createAIPolicyController, automaticAIStatus, automaticAIPaused } from "./core/ai-policy.js";
+import { presetOrigins, localExtrasPermission } from "./core/media-sites.js";
+import { LEARNING_KEY, initialLearningGuide, learningAction } from "./core/learning-guide.js";
 import { createActivityController } from "./activity-controller.js";
 import { createReminderController } from "./reminder-controller.js";
 import { ACTIVITY_ALARM, ACTIVITY_KEY } from "./core/activity.js";
@@ -30,7 +33,7 @@ import { APP_VERSION } from "./core/release.js";
 import { createBrowserTracker } from "./browser-tracker.js";
 import { TRACKING_ALARM } from "./core/browser-tracking.js";
 import { createMemoryWorker } from "./memory-worker.js";
-import { MEMORY_ALARM, selectMemories } from "./core/learned-memory.js";
+import { MEMORY_ALARM, LEARNED_MEMORY_KEY, selectMemories } from "./core/learned-memory.js";
 import { buildDayAdviceRequest, validateDayAdvice } from "./core/day-advice.js";
 import { buildGuidanceRequest, validateGuidance } from "./core/guided-planning.js";
 import { appendDiagnostic, createDiagnosticReport, diagnosticRequestText, DIAGNOSTICS_KEY, DIAGNOSTICS_SETTINGS_KEY, extractProviderError, httpFailureDetails, normalizeDiagnostic, normalizeDiagnosticSettings } from "./core/diagnostics.js";
@@ -49,8 +52,13 @@ function queueAppWrite(operation) {
 }
 const browserTracker = createBrowserTracker(chrome);
 const readApp = async () => normalizeState((await chrome.storage.local.get(STATE_KEY))[STATE_KEY]);
+const aiPolicy = createAIPolicyController(chrome.storage.local, { migrate: async () => {
+  const saved = await chrome.storage.local.get([STATE_KEY, ACTIVITY_KEY, LEARNED_MEMORY_KEY]);
+  return Boolean(saved[STATE_KEY]?.preferences?.autoSort || saved[ACTIVITY_KEY]?.settings?.aiEnabled || saved[LEARNED_MEMORY_KEY]?.settings?.learningEnabled);
+} });
 const activityController = createActivityController(chrome, {
-  readApp, requestAI: (preparedRequest, validator) => runGemini("activity-classify", { preparedRequest, validator })
+  readApp, automaticAllowed: async () => automaticAIStatus(await aiPolicy.get()) === "ready",
+  requestAI: (preparedRequest, validator, options) => runGemini("activity-classify", { preparedRequest, validator }, options?.automatic)
 });
 const reminderController = createReminderController(chrome, { readApp, readActivity: () => activityController.read() });
 const activityTick = () => { void activityController.tick().catch(() => {}); };
@@ -95,7 +103,8 @@ const memoryWorker = createMemoryWorker({
   storage: chrome.storage.local, alarms: chrome.alarms,
   readState: async () => normalizeState((await chrome.storage.local.get(STATE_KEY))[STATE_KEY]),
   readCredential,
-  requestUpdate: (preparedRequest, validator) => runGemini("memory-update", { preparedRequest, validator }),
+  automaticPolicy: () => aiPolicy.get(),
+  requestUpdate: (preparedRequest, validator, options) => runGemini("memory-update", { preparedRequest, validator }, options?.automatic),
   interactiveBusy: () => interactiveRequests > 0
 });
 
@@ -213,11 +222,19 @@ async function clearCredential() {
     chrome.storage.session.remove(SESSION_KEY),
     chrome.storage.local.remove([REMEMBERED_KEY, LAST_TEST_KEY])
   ]);
+  await aiPolicy.settings({ automaticEnabled: false });
 }
 
 async function callGemini(request, credential, diagnostic) {
   diagnostic.phase = "request";
-  diagnostic.requestSent = true;
+  // Reserve immediately before sending. All automatic features share one writer;
+  // manual actions and connection tests never consume this local allowance.
+  const reservation = diagnostic.automatic ? await aiPolicy.reserve({ sort: "sorting", "activity-classify": "activity", "memory-update": "memory" }[diagnostic.action]) : null;
+  if ((await readCredential()).apiKey !== credential.apiKey) throw new Error("AI connection changed. No request was sent.");
+  if (reservation) {
+    const latest = await aiPolicy.get();
+    if (!latest.automaticEnabled || latest.epoch !== reservation.epoch) throw automaticAIPaused(latest);
+  }
   diagnostic.inputCharacters = request.input.length;
   diagnostic.schemaCharacters = JSON.stringify(request.schema).length;
   diagnostic.schemaVariant = request.schemaVariant;
@@ -241,6 +258,7 @@ async function callGemini(request, credential, diagnostic) {
   let response;
   let body = null;
   try {
+    diagnostic.requestSent = true;
     response = await fetch(GEMINI_ENDPOINT, {
       method: "POST",
       headers: {
@@ -274,6 +292,7 @@ async function callGemini(request, credential, diagnostic) {
   } finally {
     clearTimeout(timeout);
   }
+  if ((await readCredential()).apiKey !== credential.apiKey || reservation && (await aiPolicy.get()).epoch !== reservation.epoch) throw new Error("AI was paused or its connection changed. The response was not applied.");
   if (!response.ok) {
     Object.assign(diagnostic, httpFailureDetails(response.status, body));
     if (diagnostic.requestText) {
@@ -292,9 +311,9 @@ async function callGemini(request, credential, diagnostic) {
   return body;
 }
 
-async function runGemini(action, payload = {}) {
+async function runGemini(action, payload = {}, automatic = false) {
   const started = Date.now();
-  const diagnostic = { timestamp: new Date(started).toISOString(), appVersion: APP_VERSION, action, phase: "setup", code: "internal_error" };
+  const diagnostic = { timestamp: new Date(started).toISOString(), appVersion: APP_VERSION, action, automatic: automatic === true, phase: "setup", code: "internal_error" };
   if (action !== "memory-update") interactiveRequests += 1;
   try {
     await diagnosticWrites;
@@ -405,10 +424,11 @@ async function runGeminiAttempt(action, payload, diagnostic) {
 }
 
 let sortingRun = null;
-function runSorting() {
+function runSorting(manual = false) {
   if (sortingRun) return sortingRun;
   sortingRun = (async () => {
     const credential = await readCredential();
+    const allowCloud = manual || automaticAIStatus(await aiPolicy.get()) === "ready";
     const batch = await queueAppWrite(async () => {
       const saved = await chrome.storage.local.get(STATE_KEY);
       let current = normalizeState(saved[STATE_KEY]);
@@ -418,7 +438,7 @@ function runSorting() {
       const decisions = rules.map(({ task, rule }) => ({ id: task.id, ...rule }));
       for (const task of current.tasks) if (decisions.some(item => item.id === task.id)) task.sortFingerprint = sortingFingerprint(task);
       current = applySortResults(current, candidates, decisions);
-      const pending = credential.apiKey ? sortingCandidates(current).slice(0, 10) : [];
+      const pending = credential.apiKey && allowCloud ? sortingCandidates(current).slice(0, 10) : [];
       // Claim the batch before the network call: worker restarts and failed
       // requests cannot repeatedly consume quota for the same task revision.
       for (const task of pending) task.sortFingerprint = sortingFingerprint(task);
@@ -428,14 +448,24 @@ function runSorting() {
     let error = "";
     if (batch.length) {
       try {
-        const decisions = await runGemini("sort", { tasks: batch });
+        const decisions = await runGemini("sort", { tasks: batch }, !manual);
         await queueAppWrite(async () => {
           const saved = await chrome.storage.local.get(STATE_KEY);
           const current = normalizeState(saved[STATE_KEY]);
           const next = applySortResults(current, batch, decisions);
           await chrome.storage.local.set({ [STATE_KEY]: next });
         });
-      } catch (failure) { error = String(failure.message || "Sorting failed."); }
+      } catch (failure) {
+        error = String(failure.message || "Sorting failed.");
+        if (failure.code === "automatic_ai_paused") await queueAppWrite(async () => {
+          const current = await readApp();
+          for (const task of current.tasks) {
+            const claimed = batch.find(item => item.id === task.id);
+            if (claimed && !task.sortLocked && task.sortFingerprint === sortingFingerprint(claimed) && sortingFingerprint(task) === sortingFingerprint(claimed)) task.sortFingerprint = "";
+          }
+          await chrome.storage.local.set({ [STATE_KEY]: current });
+        });
+      }
     }
     const state = normalizeState((await chrome.storage.local.get(STATE_KEY))[STATE_KEY]);
     return { state, error };
@@ -484,6 +514,31 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     if (["activity:signal", "activity:signal-hello"].includes(request?.type)) return activityController.recordSignal(request,_sender);
     const ownPanel = Boolean(_sender.tab && chrome.runtime.getURL && String(_sender.url??"").split(/[?#]/)[0] === chrome.runtime.getURL("src/sidepanel.html"));
     if ((_sender.id && _sender.id !== chrome.runtime.id) || _sender.tab && !ownPanel) throw new Error("Use these controls in the Stuđiô panel.");
+    if (request?.type === "ai-policy:get") return aiPolicy.get();
+    if (request?.type === "ai-policy:settings") {
+      if (request.patch?.automaticEnabled === true && !(await readCredential()).apiKey) throw new Error("Connect Gemini before enabling automatic AI.");
+      const result = await aiPolicy.settings(request.patch ?? {});
+      void memoryWorker.schedule().catch(() => {});
+      return result;
+    }
+    if (request?.type === "privacy:local") {
+      if (chrome.extension?.inIncognitoContext) throw new Error("Use these controls in the regular Stuđiô panel.");
+      if (typeof request.enabled !== "boolean") throw new Error("Choose whether local extras are enabled.");
+      const origins = presetOrigins(request.origins);
+      if (request.enabled && !await chrome.permissions.contains(localExtrasPermission(origins))) throw new Error("Local feature permissions were not granted. Existing choices were kept.");
+      await browserTracker.setEnabled(false);
+      const activity = await activityController.act("local-extras", { enabled: request.enabled, origins });
+      const reminders = await reminderController.act("settings", { enabled: request.enabled, review: request.enabled });
+      activityTick(); reminderTick();
+      return { activity, reminders };
+    }
+    if (request?.type === "guide:get" || request?.type === "guide:action") return queueAppWrite(async () => {
+      const stored = await chrome.storage.local.get(LEARNING_KEY);
+      const guide = initialLearningGuide(stored[LEARNING_KEY], await readApp());
+      const next = request.type === "guide:action" ? learningAction(guide, request.action, request.options) : guide;
+      if (JSON.stringify(next) !== JSON.stringify(stored[LEARNING_KEY])) await chrome.storage.local.set({ [LEARNING_KEY]: next });
+      return next;
+    });
     if (request?.type?.startsWith("activity:") || request?.type?.startsWith("reminder:") || request?.type?.startsWith("recovery:")) {
       if (chrome.extension?.inIncognitoContext) throw new Error("Use these controls in the regular Stuđiô panel.");
       if (request.type === "activity:get") return activityController.tick();
@@ -555,7 +610,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     }
     if (request?.type === "sorting:run") {
       if ((_sender.id && _sender.id !== chrome.runtime.id) || _sender.tab && !ownPanel) throw new Error("Use these controls in the Stuđiô panel.");
-      return runSorting();
+      return runSorting(request.manual === true);
     }
     if (request?.type?.startsWith("tracking:")) {
       if ((_sender.id && _sender.id !== chrome.runtime.id) || _sender.tab && !ownPanel || chrome.extension?.inIncognitoContext) throw new Error("Tracking controls are available only in the regular Stuđiô panel.");
@@ -575,6 +630,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
       };
     }
     if (request?.type === "gemini:connect") {
+      await aiPolicy.get(); // Initialize migration before connecting; a key is not automation consent.
       await storeCredential(request.apiKey, Boolean(request.remember), request.model || DEFAULT_MODEL);
       try {
         const data = await runGemini("test");
@@ -605,9 +661,11 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     }
     if (request?.type === "app:replace") {
       return queueAppWrite(async () => {
+      await aiPolicy.settings({ automaticEnabled: false });
       await activityController.act(request.reset === true ? "clear" : "settings", { enabled:false, aiEnabled:false });
       await reminderController.act("clear");
       await chrome.storage.local.set({ [RECOVERY_KEY]:{pending:null,history:[]} });
+      if (request.reset === true) await chrome.storage.local.remove(LEARNING_KEY);
       if (request.reset === true) await browserTracker.clear();
       else await browserTracker.setEnabled(false);
       const state = normalizeState(request.state);

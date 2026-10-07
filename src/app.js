@@ -1,5 +1,11 @@
 import { createActivityUI } from "./activity-ui.js";
 import { renderPrivacy } from "./privacy-view.js";
+import { learningTopic, learningContext, currentLearningStep, normalizeLearningGuide } from "./core/learning-guide.js";
+import { renderLearningOffer, renderLearningCard, renderLearningCenter, showLearningTarget, clearLearningTarget, guideText, trapDialogKey } from "./learning-view.js";
+import { renderLocalExtrasDialog, renderAIWarning, renderAIPolicy, renderAbout } from "./features-view.js";
+import { MEDIA_PRESETS, localExtrasState } from "./core/media-sites.js";
+import { getAIPolicy, setAIPolicy, requestLocalExtrasPermission, applyLocalExtras, revokeMediaAccess, observeAIPolicy } from "./platform.js";
+import { getLearningGuide, learningGuideAction } from "./platform.js";
 import { nextFocus } from "./core/daily-flow.js";
 import { delayedBlocks } from "./core/recovery.js";
 import { resourceIdentity } from "./core/activity.js";
@@ -99,6 +105,10 @@ let gemini = { connected: false, remembered: false, model: DEFAULT_MODEL, lastTe
 let diagnosticSettings = null;
 let learnedMemory = null;
 let tracking = null;
+let learningGuide = null;
+let aiPolicy = null;
+let guideReturnFocus = null;
+let learningError = "";
 let toastTimer;
 let saveInFlight = false;
 const ui = {
@@ -125,7 +135,8 @@ const ui = {
   sortError: "",
   lastSortKey: "",
   guideDraft: {},
-  quickText: "", privacyMediaSetup: false, privacyAdvanced: false
+  quickText: "", privacyMediaSetup: false, privacyAdvanced: false, learningTopic: null,
+  learningTour: false, learningIndex: 0, nextTaskId: null, modalReturnSelector: null
 };
 
 const activityUI = createActivityUI({ getState: () => state, setState: next => { state = next; }, render, toast: showToast });
@@ -177,7 +188,9 @@ async function timerAction(action, options = {}) {
   if (busy("timer")) return;
   const previousMoves = new Set(state.kanban.changes.map(change => change.id));
   ui.busy.add("timer");
-  try { state = await performTimerAction(action, options); }
+  try {
+    state = await performTimerAction(action, options);
+  }
   finally { ui.busy.delete("timer"); render(); }
   const move = state.kanban.changes.find(change => !previousMoves.has(change.id) && change.reason === "timer_started");
   if (move) showToast(t("Moved to Doing: task timer started.") + (kanbanWip(state).length > state.kanban.wipLimit ? t(" WIP limit exceeded.") : ""));
@@ -192,6 +205,11 @@ async function kanbanAction(action, options = {}) {
 
 function taskById(id) {
   return state.tasks.find(task => task.id === id) ?? null;
+}
+
+function selectedFocus() {
+  const task = activeTasks().find(item => item.id === ui.nextTaskId);
+  return task ? { task, block: null, minutes: Math.min(task.durationMinutes || state.preferences.focusMinutes, state.preferences.focusMinutes) } : nextFocus(state);
 }
 
 function proposalTaskIds(proposal) {
@@ -223,7 +241,7 @@ function routeText(route) {
 function renderTopbar() {
   return html`<header class="topbar">
     <div class="brand">${icon("logo")}<span class="brand-word">Stuđiô</span></div>
-    <button class="icon-button ghost" type="button" data-action="go-settings" aria-label="Open settings">${icon("settings")}</button>
+    <div class="button-row">${learningContext(ui) ? `<button class="btn ghost compact" type="button" data-action="learning-start">${guideText("Explain this screen", "Giải thích màn hình")}</button>` : ""}<button class="icon-button ghost" type="button" data-action="learning-open" aria-label="${guideText("Help & tours", "Trợ giúp & hướng dẫn")}">?</button><button class="icon-button ghost" type="button" data-action="go-settings" aria-label="Open settings">${icon("settings")}</button></div>
   </header>`;
 }
 
@@ -313,13 +331,18 @@ function renderOnboarding() {
 function renderPrivacyScreen() {
   const snapshot = activityUI.privacyState();
   return renderPrivacy({ state, ...snapshot, privacyReady: snapshot.privacyReady && tracking !== null && gemini.available !== false, gemini, learned: learnedMemory,
-    diagnostics: diagnosticSettings, legacy: tracking, advancedOpen: ui.privacyAdvanced, working: busy("privacy") || busy("connect"),
+    diagnostics: diagnosticSettings, legacy: tracking, aiPolicy, advancedOpen: ui.privacyAdvanced, working: busy("privacy") || busy("connect"),
     mediaSetup: ui.privacyMediaSetup, geminiForm: ui.showGeminiForm ? renderGeminiCard() : "" });
 }
 
 async function changePrivacy(key, enabled) {
   if (busy("privacy") || busy("connect")) return;
   if (!activityUI.privacyState().privacyReady || tracking === null || gemini.available === false) throw new Error("Privacy settings are unavailable. Reopen this screen to retry.");
+  if (key === "localAll") {
+    if (enabled) { ui.modalReturnSelector = "#privacy-local-all"; ui.modal = { type: "local-extras", origins: MEDIA_PRESETS.map(site => site.origin) }; render(); }
+    else await saveLocalExtras(false, []);
+    return;
+  }
   if (key === "gemini" && enabled) { ui.showGeminiForm = true; render(); return; }
   if (key === "media" && enabled) { ui.privacyMediaSetup = true; render(); return; }
   // Request optional permissions inside this original change gesture, before awaiting.
@@ -327,7 +350,7 @@ async function changePrivacy(key, enabled) {
     : enabled && key === "notifications" ? requestNotificationPermission() : Promise.resolve(true);
   await setBusy("privacy", async () => {
     if (!await permission) throw new Error(key === "tracking" ? "Tracking permission was not granted." : "Notification permission was not granted.");
-    if (key === "gemini") { gemini = await disconnectGemini(); ui.showGeminiForm = false; }
+    if (key === "gemini") { gemini = await disconnectGemini(); aiPolicy = await getAIPolicy(); ui.showGeminiForm = false; }
     else if (key === "legacy") tracking = await trackingAction("pause");
     else if (key === "media") {
       for (const origin of activityUI.privacyState().activity.settings.signalOrigins) await performActivityAction("site-remove", { origin });
@@ -342,6 +365,21 @@ async function changePrivacy(key, enabled) {
     else if (key === "diagnostics") diagnosticSettings = await setGeminiDiagnosticText(enabled);
     await activityUI.load();
     tracking = await getTracking().catch(() => tracking);
+  });
+}
+
+async function saveLocalExtras(enabled, origins, permission = Promise.resolve(true)) {
+  await setBusy("privacy", async () => {
+    try {
+      if (!await permission) throw new Error(guideText("Permission was not granted. Your feature choices are unchanged.", "Chưa cấp quyền. Lựa chọn tính năng không thay đổi."));
+      await applyLocalExtras(enabled, origins);
+      ui.modal = null;
+      showToast(guideText(enabled ? "Local choices enabled. AI choices are unchanged." : "Local extras paused. Recorded history kept.", enabled ? "Đã bật lựa chọn trên máy. Lựa chọn AI không đổi." : "Đã dừng tính năng trên máy. Giữ lịch sử đã ghi."));
+    } finally {
+      // Independent stores can partially succeed. Always show their actual saved state.
+      await activityUI.load();
+      tracking = await getTracking().catch(() => null);
+    }
   });
 }
 
@@ -488,20 +526,21 @@ function renderAdaptiveHero(route) {
 }
 
 function renderToday() {
-  const { task, block, minutes } = nextFocus(state);
+  const { task, block, minutes } = selectedFocus();
   const tasks = activeTasks().slice(0, 4);
   const active = ["running", "paused", "ready", "complete"].includes(state.focus.status);
   const delayed = delayedBlocks(state).length;
   return html`<div class="header-copy"><p class="eyebrow">${escapeHtml(formatDay(new Date(), locale, { weekday: "long" }))}</p><h1 class="page-title">${greeting()}.</h1><p class="page-subtitle">One thing to do. A little room to begin.</p></div><div class="stack today-flow">
     <form id="quick-task-form" class="card quick-entry"><label for="quick-task">What needs doing?</label><div class="quick-entry-row"><input id="quick-task" class="input" name="title" maxlength="160" value="${escapeHtml(ui.quickText)}" placeholder="Add one thing…" required><button class="btn" type="submit" ${busy("quick-add") ? "disabled" : ""}>Add task</button></div><p class="field-help">Saved locally. Details can wait.</p></form>
-    <section class="card accent"><p class="eyebrow">A place to begin</p><h2>${escapeHtml(block?.label || task?.title || t("Start with a little focus"))}</h2>
+    <section class="card accent focus-hero"><div class="focus-emblem" aria-hidden="true"><span></span></div><p class="eyebrow">A place to begin</p><h2>${escapeHtml(block?.label || task?.title || t("Start with a little focus"))}</h2>
       ${active ? html`<button class="btn primary" type="button" data-action="return-focus">Return to timer</button>` : html`<form id="quick-focus-form" data-task-id="${escapeHtml(task?.id ?? "")}" data-block-id="${escapeHtml(block?.id ?? "")}"><div class="quick-focus-row"><div class="field"><label for="quick-minutes">Minutes for now</label><input id="quick-minutes" class="input" name="durationMinutes" type="number" min="1" max="480" step="1" value="${minutes}" required></div><button class="btn primary" type="submit" ${busy("timer") ? "disabled" : ""}>${icon("play")} Start focus</button></div></form>`}
       ${block ? html`<p class="field-help">${t("Planned start:")} ${escapeHtml(formatTime(block.startAt, locale))}. ${t("Starting early is your choice; the plan does not move.")}</p>` : ""}
+      ${!active && activeTasks().length ? `<button class="btn ghost compact" type="button" data-action="choose-focus">${guideText("Choose another", "Chọn việc khác")}</button>` : ""}
       <button class="btn ghost compact" type="button" data-action="open-focus" data-task-id="${escapeHtml(task?.id ?? "")}" data-block-id="${escapeHtml(block?.id ?? "")}">Timer options</button>
     </section>
     ${delayed || activityUI.hasRecovery() ? html`<details class="card today-recovery"><summary>Day changed? Adjust the remaining work</summary><p class="field-help">Past blocks may still be open. Nothing is marked missed or moved automatically.</p>${activityUI.renderRecovery()}</details>` : ""}
     ${pendingProposal(state) ? html`<section class="card"><p>A schedule proposal is waiting. Nothing has moved.</p><button class="btn" type="button" data-action="navigate" data-view="plan" data-plan-view="schedule">Review proposal</button></section>` : ""}
-    ${tasks.length ? html`<section class="section"><div class="section-heading"><h2>Open tasks</h2><button class="btn compact ghost" type="button" data-action="navigate" data-view="plan">All tasks</button></div><div class="task-list">${tasks.map(task => renderTask(task)).join("")}</div></section>` : ""}
+    ${tasks.length ? html`<details class="card today-other-tasks"><summary>Open tasks</summary><div class="section-heading"><span>${activeTasks().length}</span><button class="btn compact ghost" type="button" data-action="navigate" data-view="plan">All tasks</button></div><div class="task-list">${tasks.map(task => renderTask(task)).join("")}</div></details>` : ""}
     ${activityUI.renderDailySummary()}
     <details class="card"><summary>Plan and time tools</summary><div class="stack">${renderTimeTools(state)}${renderBudget(state)}<section><h2>Today’s blocks</h2>${renderTodaySchedule()}</section><button class="btn" type="button" data-action="open-omnibar">Smart Capture · optional AI</button></div></details>
     ${state.profile.privacyReviewVersion < 1 ? html`<p class="field-help">Your existing privacy choices are unchanged. <button class="btn ghost compact" type="button" data-action="open-privacy">Review privacy choices</button></p>` : ""}
@@ -560,7 +599,7 @@ function renderPlan() {
   const eligible = schedulableTasks(state);
   const tabs = html`<div class="segmented plan-tabs" role="group" aria-label="Plan view">${[["matrix", "Eisenhower"], ["schedule", "Schedule"], ...(state.kanban.enabled ? [["kanban", "Kanban"]] : [])].map(([view, label]) => html`<button class="segment ${ui.planView === view ? "active" : ""}" type="button" data-action="plan-view" data-value="${view}" aria-pressed="${ui.planView === view}">${t(label)}</button>`).join("")}</div>`;
   if (ui.planView === "kanban") return html`<div class="header-copy"><h1 class="page-title">Plan</h1></div>${tabs}<div class="stack">${renderBudget(state, { compact: true })}${renderKanban(state)}</div>`;
-  if (ui.planView === "matrix") return html`<div class="header-copy"><p class="eyebrow">Choose what matters</p><h1 class="page-title">Plan</h1><p class="page-subtitle">Separate what matters from what feels urgent.</p></div>${tabs}<div class="stack">${renderKanbanOffer(state)}${renderBudget(state, { compact: true })}${renderEisenhower(state, { working: busy("sort"), connected: gemini.connected, error: ui.sortError })}</div>`;
+  if (ui.planView === "matrix") return html`<div class="header-copy"><p class="eyebrow">Choose what matters</p><h1 class="page-title">Plan</h1><p class="page-subtitle">Separate what matters from what feels urgent.</p></div>${tabs}<div class="stack">${renderKanbanOffer(state)}${renderBudget(state, { compact: true })}${state.preferences.autoSort ? `<p class="field-help">${guideText("Automatic AI also needs permission in Settings → AI on your terms and shares its daily limit. Local rules still run. Allow AI sorting / Retry sorting makes an explicit manual request for eligible tasks.", "AI tự động còn cần cho phép trong Cài đặt → AI theo lựa chọn riêng và dùng chung giới hạn mỗi ngày. Quy tắc trên máy vẫn chạy. Cho phép AI phân loại / Thử phân loại lại là yêu cầu thủ công cho các việc đủ điều kiện.")}</p>` : ""}${renderEisenhower(state, { working: busy("sort"), connected: gemini.connected, error: ui.sortError })}</div>`;
   return html`<div class="header-copy"><p class="eyebrow">Shape, then commit</p><h1 class="page-title">Plan</h1><p class="page-subtitle">The local scheduler finds open time, respects existing blocks, and keeps its proposal separate until you approve it.</p></div>
     ${tabs}<div class="stack">
       ${renderBudget(state, { compact: true })}
@@ -634,6 +673,7 @@ function renderSettings() {
     <div class="stack">
       <section class="card"><div class="field"><label for="language">Language / Ngôn ngữ</label><select id="language" class="select" data-preference="language"><option value="en" ${state.preferences.language === "en" ? "selected" : ""}>English</option><option value="vi" ${state.preferences.language === "vi" ? "selected" : ""}>Tiếng Việt</option></select></div></section>
       <section class="card"><h2>Privacy choices</h2><p>Review each feature, its purpose, data use and permissions.</p><button class="btn" type="button" data-action="open-privacy">Review privacy choices</button></section>
+      <section class="card about-shortcut"><h2>${guideText("About Stuđiô", "Về Stuđiô")}</h2><p>${guideText("Our approach and the MD Studio design inspiration.", "Định hướng và cảm hứng thiết kế từ MD Studio.")}</p><button class="btn ghost" type="button" data-action="open-about">${guideText("About & credits", "Giới thiệu & ghi nhận")}</button></section>
       ${renderKanbanSettings(state)}
       ${activityUI.renderReminders()}
       <section class="card"><h2>Planning assistance</h2><label class="check-row"><input id="planning-enabled" type="checkbox" ${state.preferences.planningEnabled ? "checked" : ""}><span>Enable planning assistance</span></label><p class="field-help">Guided planning and optional Gemini suggestions. Available here in Settings.</p><details class="mini-disclosure"><summary>When the reminder appears</summary><p>Once, after seven days, if the previous seven full days average at least three AI requests per day. Counts Capture, explanations, reflections and planning help. Connection tests and automatic actions are excluded.</p></details></section>
@@ -641,6 +681,7 @@ function renderSettings() {
       <section class="card"><h2>Automatic daily budget</h2><label class="check-row"><input id="auto-daily-budget" type="checkbox" ${state.preferences.autoDailyBudget ? "checked" : ""}><span>Estimate each new day</span></label><p class="field-help">Blends recent budgets and recorded focus, with the default for limited history. Capped by workday hours. Today's tasks and blocks check whether the plan fits.</p><p class="field-help">Local calculation, no AI call. Manual values stay until you choose Use estimate. Outside commitments are not included.</p></section>
       ${renderTrackingCard(tracking, busy("tracking"))}<button class="btn" type="button" data-action="navigate" data-view="activity">Activity timeline</button>
       ${renderGeminiCard()}
+      ${renderAIPolicy(aiPolicy, gemini.connected, busy("privacy"))}
       <section class="card"><p class="eyebrow">Gemini capture</p><h2>From an idea to focus blocks</h2><p class="subtle">Allow Gemini to choose several blocks and suggest their times from one note. Review, edit, and add them together directly from capture.</p>${renderCaptureToggle("settings-capture-multiple")}<p class="field-help">Starts on for “I’m just starting out” and off for “I have my own system.” Your later choice is kept. When off, capture returns one task draft.</p></section>
       ${renderMemorySettings()}
       ${renderLearnedSettings(learnedMemory, { busy: busy("learned"), installed: isExtension, connected: gemini.connected, dayEnd: state.preferences.dayEnd, noteText: ui.learningNote, noteScope: ui.learningNoteScope })}
@@ -847,6 +888,9 @@ function renderConfirmModal(data) {
 
 function renderModal() {
   if (!ui.modal) return "";
+  if (ui.modal.type === "local-extras") return renderLocalExtrasDialog(ui.modal.origins, busy("privacy"));
+  if (ui.modal.type === "automatic-ai") return renderAIWarning();
+  if (ui.modal.type === "choose-focus") return `<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="choose-focus-title"><h2 id="choose-focus-title" tabindex="-1">${guideText("What fits right now?", "Việc nào phù hợp lúc này?")}</h2><p>${guideText("Choosing a task does not start a timer or move your plan.", "Chọn việc không chạy bộ đếm hay đổi kế hoạch.")}</p><div class="choice-list">${activeTasks().map(task => `<button type="button" class="choice" data-action="select-focus" data-task-id="${escapeHtml(task.id)}"><span><strong>${escapeHtml(task.title)}</strong><small>${task.durationMinutes} ${guideText("min estimated", "phút ước tính")}</small></span></button>`).join("")}</div><div class="button-row"><button class="btn ghost" type="button" data-action="close-modal">${guideText("Cancel", "Hủy")}</button></div></section></div>`;
   if (ui.modal.type.startsWith("kanban-")) return renderKanbanModal(state, ui.modal);
   if (ui.modal.type === "planning-prompt") return html`<div class="modal-backdrop" data-action="backdrop-close"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="planning-prompt-title"><h2 id="planning-prompt-title">Enable planning assistance?</h2><p>AI use averaged at least 3 requests a day over the last week. Planning help is available in Settings.</p><div class="button-row"><button class="btn primary" type="button" data-action="enable-planning">Enable</button><button class="btn ghost" type="button" data-action="close-modal">Not now</button></div></section></div>`;
   if (ui.modal.type === "manual-plan") return html`<div class="modal-backdrop" data-action="backdrop-close"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="manual-plan-title"><div class="modal-head"><h2 id="manual-plan-title">Schedule task</h2><button class="icon-button ghost" type="button" data-action="close-modal" aria-label="Close">${icon("close")}</button></div>${renderPlanningAssistant({ manualOnly: true, draft: ui.guideDraft, tasks: activeTasks(), saving: busy("guide-save") })}</section></div>`;
@@ -860,13 +904,101 @@ function renderModal() {
 }
 
 function renderShell() {
-  const content = ui.view === "privacy" ? html`${renderPrivacyScreen()}<button class="btn primary" type="button" data-action="close-privacy" ${busy("privacy") || busy("connect") ? "disabled" : ""}>Done</button>` : ui.view === "activity" ? activityUI.render() : ui.view === "plan" ? renderPlan() : ui.view === "insights" ? renderInsights() : ui.view === "settings" ? renderSettings() : renderToday();
-  return html`<div class="shell">${renderTopbar()}<main>${content}</main></div>${renderNav()}${["today", "plan"].includes(ui.view) ? renderOmnibar() : ""}${renderModal()}`;
+  const content = ui.view === "about" ? renderAbout() : ui.view === "learn" ? renderLearningCenter(learningGuide ?? normalizeLearningGuide({ enabled: false }), learningError, busy("learning")) : ui.view === "privacy" ? html`${renderPrivacyScreen()}<button class="btn primary" type="button" data-action="close-privacy" ${busy("privacy") || busy("connect") ? "disabled" : ""}>Done</button>` : ui.view === "activity" ? activityUI.render() : ui.view === "plan" ? renderPlan() : ui.view === "insights" ? renderInsights() : ui.view === "settings" ? renderSettings() : renderToday();
+  return html`<div class="shell">${renderTopbar()}<main><div id="learning-slot">${renderInteractiveGuide()}</div><!-- learning-slot-end -->${content}</main></div>${renderNav()}${["today", "plan"].includes(ui.view) ? renderOmnibar() : ""}${renderModal()}<div id="learning-overlay-host">${renderTour()}</div><!-- learning-overlay-end -->`;
+}
+
+function activeLearningStep() {
+  if (ui.learningTour) return learningTopic(learningContext(ui))?.steps[ui.learningIndex] ?? null;
+  if (!state?.profile.onboardingComplete || ui.view === "learn" || ui.modal || ui.busy.size) return null;
+  if (["running", "paused", "ready", "complete"].includes(state.focus.status)) return null;
+  return currentLearningStep(learningGuide, learningContext(ui));
+}
+
+function renderInteractiveGuide() {
+  const step = activeLearningStep();
+  return !ui.learningTour && step ? renderLearningOffer(learningContext(ui)) : "";
+}
+
+function renderTour() { return ui.learningTour ? renderLearningCard(learningGuide, learningContext(ui), activeLearningStep(), busy("learning")) : ""; }
+
+async function saveLearning(action, options = {}) {
+  try {
+    learningGuide = await learningGuideAction(action, options);
+    learningError = "";
+    return true;
+  } catch {
+    learningError = guideText("Guide progress could not be saved. Your tasks and timer are unaffected. Try again from Help & tours.", "Chưa lưu được tiến độ hướng dẫn. Việc và bộ đếm không bị ảnh hưởng. Thử lại trong Trợ giúp & hướng dẫn.");
+    return false;
+  }
+}
+
+async function handleLearningAction(action, button) {
+  if (busy("learning")) return;
+  if (action === "learning-open") {
+    ui.learningTopic = null; ui.learningTour = false; ui.view = "learn"; ui.omnibarOpen = false;
+    render();
+    document.querySelector("#learning-center-title")?.focus?.({ preventScroll: true });
+    return;
+  }
+  const topicId = learningContext(ui), step = activeLearningStep();
+  const topic = learningTopic(button.dataset.topic);
+  if (["learning-resume", "learning-replay"].includes(action) && !topic) return;
+  ui.busy.add("learning");
+  let saved = true, routeChanged = false;
+  try {
+    if (action === "learning-enabled") {
+      saved = await saveLearning("enabled", { enabled: !learningGuide?.enabled });
+      routeChanged = true;
+    } else if (topic || action === "learning-start") {
+      const selected = topic ?? learningTopic(topicId);
+      if (!selected) return;
+      saved = await saveLearning(action === "learning-replay" ? "replay" : "resume", { topic: selected.id });
+      if (saved) {
+        guideReturnFocus = document.activeElement;
+        ui.learningTopic = selected.id;
+        const firstUnread = selected.steps.findIndex(item => !learningGuide.steps[item.id]);
+        ui.learningIndex = action === "learning-replay" || firstUnread < 0 ? 0 : firstUnread;
+        ui.learningTour = true;
+        if (topic) {
+          routeChanged = true; ui.view = topic.view;
+          if (topic.id === "kanban" && !state.kanban.enabled) ui.view = "settings";
+          ui.planView = topic.planView === "kanban" && !state.kanban.enabled ? "matrix" : topic.planView ?? ui.planView;
+          ui.omnibarOpen = topic.id === "capture";
+        }
+        ui.focusMinimized = true;
+      }
+    } else if (action === "learning-pause") {
+      saved = await saveLearning("pause", { topic: topicId });
+      // Closing always works, even if the preference store is unavailable.
+      ui.learningTour = false;
+    } else if (action === "learning-back" && ui.learningTour) ui.learningIndex = Math.max(0, ui.learningIndex - 1);
+    else if (["learning-next", "learning-skip"].includes(action) && step && ui.learningTour) {
+      saved = await saveLearning(action === "learning-next" ? "acknowledge" : "skip", { step: step.id });
+      if (saved) {
+        ui.learningIndex++;
+        if (ui.learningIndex >= learningTopic(topicId).steps.length) ui.learningTour = false;
+      }
+    }
+  } finally { ui.busy.delete("learning"); }
+  const slot = document.querySelector("#learning-slot"), host = document.querySelector("#learning-overlay-host");
+  if (slot && host && !routeChanged) {
+    // Tour actions preserve the surrounding form and its unsaved inputs.
+    clearLearningTarget();
+    slot.innerHTML = renderInteractiveGuide();
+    host.innerHTML = renderTour();
+    if (ui.learningTour) showLearningTarget(activeLearningStep());
+  } else render(true);
+  if (!saved && learningError) showToast(learningError, "error");
+  if (!ui.learningTour) {
+    (guideReturnFocus?.isConnected ? guideReturnFocus : document.querySelector('[data-action="learning-start"]') ?? document.querySelector('[data-action="learning-open"]'))?.focus?.({ preventScroll: true });
+    guideReturnFocus = null;
+  }
 }
 
 let promptOpening = false;
 async function maybePlanningPrompt() {
-  if (promptOpening || !state.profile.onboardingComplete || ui.modal || ui.omnibarOpen || ui.busy.size || ["running", "paused", "ready"].includes(state.focus.status) || !planningPromptEligible(state)) return;
+  if (ui.view === "learn" || activeLearningStep() || promptOpening || !state.profile.onboardingComplete || ui.modal || ui.omnibarOpen || ui.busy.size || ["running", "paused", "ready"].includes(state.focus.status) || !planningPromptEligible(state)) return;
   promptOpening = true;
   try {
     await commit({ ...state, aiUsage: { ...state.aiUsage, promptSeenAt: new Date().toISOString() } });
@@ -877,7 +1009,7 @@ async function maybePlanningPrompt() {
 let sortTimeout;
 function scheduleAutoSort() {
   clearTimeout(sortTimeout);
-  if (!state.profile.onboardingComplete || ui.view === "privacy" || !state.preferences.autoSort || busy("sort") || ui.modal || ui.omnibarOpen) return;
+  if (ui.view === "learn" || ui.learningTour || !state.profile.onboardingComplete || ui.view === "privacy" || !state.preferences.autoSort || busy("sort") || ui.modal || ui.omnibarOpen) return;
   const candidates = sortingCandidates(state);
   if (!candidates.length || (!gemini.connected && !candidates.some(ruleClassification))) return;
   const key = JSON.stringify(candidates.map(task => [task.id, sortingFingerprint(task)]));
@@ -897,13 +1029,15 @@ function scheduleAutoSort() {
   }, 700);
 }
 
-function render() {
+function render(force = false) {
   if (!state) return;
+  if (ui.learningTour && !force && document.querySelector(".learning-overlay")) return;
+  clearLearningTarget();
   setLanguage(state.preferences.language);
   locale = getLocale();
   document.documentElement.lang = state.preferences.language;
   document.documentElement.dataset.theme = state.preferences.theme;
-  if (!state.profile.onboardingComplete) app.innerHTML = renderOnboarding();
+  if (!state.profile.onboardingComplete) app.innerHTML = renderOnboarding() + renderModal();
   else if (ui.view === "today" && !ui.focusMinimized && ["running", "paused", "ready"].includes(state.focus.status)) app.innerHTML = renderZen() + renderModal();
   else if (ui.view === "today" && !ui.focusMinimized && state.focus.status === "complete") app.innerHTML = renderPostSession() + renderModal();
   else app.innerHTML = renderShell();
@@ -915,6 +1049,12 @@ function render() {
     autofocus?.focus({ preventScroll: true });
     updateTimerDom();
     activityUI.restoreDrafts();
+    for (const node of document.querySelectorAll?.(".shell, .onboarding, .bottom-nav, .fab-wrap") ?? []) node.inert = Boolean(ui.modal);
+    const localToggle = document.querySelector("#privacy-local-all");
+    if (localToggle) { const snapshot = activityUI.privacyState(); localToggle.indeterminate = localExtrasState(snapshot.activity, snapshot.reminders).some; }
+    if (ui.learningTour) showLearningTarget(activeLearningStep());
+    if (ui.modal && ["local-extras", "automatic-ai", "choose-focus"].includes(ui.modal.type)) document.querySelector('.modal h2')?.focus?.({ preventScroll: true });
+    if (!ui.modal && ui.modalReturnSelector) { document.querySelector(ui.modalReturnSelector)?.focus?.({ preventScroll: true }); ui.modalReturnSelector = null; }
   });
 }
 
@@ -929,8 +1069,38 @@ function updateTimerDom() {
 }
 
 async function handleAction(button, event) {
-  if (busy("capture-save") || busy("data") || busy("guide-save") || busy("kanban")) return;
+  if (busy("capture-save") || busy("data") || busy("guide-save") || busy("kanban") || busy("privacy")) return;
   const action = button.dataset.action;
+  if (action.startsWith("learning-")) return handleLearningAction(action, button);
+  if (["navigate", "plan-view", "open-matrix", "go-settings", "go-gemini", "open-privacy", "close-privacy", "open-omnibar", "close-omnibar", "kanban-open", "open-about"].includes(action)) { ui.learningTopic = null; ui.learningTour = false; }
+  if (action === "open-about") { ui.view = "about"; render(); return; }
+  if (action === "choose-focus") { ui.modalReturnSelector = '[data-action="choose-focus"]'; ui.modal = { type: "choose-focus" }; render(); return; }
+  if (action === "select-focus") { if (activeTasks().some(task => task.id === button.dataset.taskId)) ui.nextTaskId = button.dataset.taskId; ui.modal = null; render(); return; }
+  if (action === "confirm-local-extras" && ui.modal?.type === "local-extras") {
+    const origins = [...ui.modal.origins];
+    const permission = requestLocalExtrasPermission(origins); // Keep Chrome's original user gesture.
+    await saveLocalExtras(true, origins, permission); return;
+  }
+  if (action === "confirm-automatic-ai" && ui.modal?.type === "automatic-ai") {
+    await setBusy("privacy", async () => { aiPolicy = await setAIPolicy({ automaticEnabled: true }); ui.lastSortKey = ""; ui.modal = null; }); return;
+  }
+  if (action === "privacy-add-preset") {
+    const site = MEDIA_PRESETS.find(item => item.origin === button.dataset.origin);
+    if (!site) return;
+    const permission = requestSignalPermission(site.origin);
+    await setBusy("privacy", async () => {
+      if (!await permission) throw new Error(guideText("Site access was not granted.", "Chưa cấp quyền truy cập trang."));
+      try { await performActivityAction("site", { origin: site.origin }); } finally { await activityUI.load(); }
+    }); return;
+  }
+  if (action === "privacy-revoke-site") {
+    const origin = button.dataset.origin;
+    if (!activityUI.privacyState().activity.settings.signalOrigins.includes(origin)) return;
+    await setBusy("privacy", async () => {
+      try { await revokeMediaAccess(origin); await performActivityAction("site-remove", { origin }); }
+      finally { await activityUI.load(); }
+    }); return;
+  }
   if (action.startsWith("activity-")) return activityUI.action(button);
   if (action.startsWith("kanban-")) {
     if (action === "kanban-preview" || action === "kanban-ask-enable") { ui.modal = { type: action === "kanban-preview" ? "kanban-preview" : "kanban-intro" }; render(); return; }
@@ -985,6 +1155,10 @@ async function handleAction(button, event) {
     if (!state.preferences.autoSort || busy("sort") || ui.modal || ui.omnibarOpen) return;
     ui.lastSortKey = "";
     await commit(updateTask(state, button.dataset.taskId, { sortLocked: false, sortFingerprint: "" }));
+    await setBusy("sort", async () => {
+      const result = await sortUnsortedTasks(true);
+      state = result.state; ui.sortError = result.error;
+    });
     return;
   }
   if (action === "day-advice") {
@@ -1010,6 +1184,7 @@ async function handleAction(button, event) {
   }
   if (action === "navigate") {
     ui.view = button.dataset.view;
+    if (ui.view === "settings") aiPolicy = await getAIPolicy().catch(() => null);
     if (ui.view === "plan" && ["matrix", "schedule", ...(state.kanban.enabled ? ["kanban"] : [])].includes(button.dataset.planView)) ui.planView = button.dataset.planView;
     ui.omnibarOpen = false;
     render();
@@ -1030,13 +1205,13 @@ async function handleAction(button, event) {
   }
   if (action === "return-timer") { ui.view = "today"; ui.focusMinimized = false; render(); return; }
   if (action === "minimize-timer") { ui.focusMinimized = true; render(); return; }
-  if (action === "go-settings") { ui.view = "settings"; render(); return; }
-  if (action === "go-gemini") { ui.view = "settings"; ui.showGeminiForm = !gemini.connected; render(); return; }
+  if (action === "go-settings") { ui.view = "settings"; aiPolicy = await getAIPolicy().catch(() => null); render(); return; }
+  if (action === "go-gemini") { ui.view = "settings"; aiPolicy = await getAIPolicy().catch(() => null); ui.showGeminiForm = !gemini.connected; render(); return; }
   if (action === "return-focus") { ui.view = "today"; ui.focusMinimized = false; render(); return; }
   if (action === "open-privacy") {
     ui.view = "privacy"; ui.showGeminiForm = false;
     await activityUI.load();
-    [gemini, tracking] = await Promise.all([getGeminiStatus().catch(() => ({ ...gemini, available: false })), getTracking().catch(() => null)]);
+    [gemini, tracking, aiPolicy] = await Promise.all([getGeminiStatus().catch(() => ({ ...gemini, available: false })), getTracking().catch(() => null), getAIPolicy().catch(() => null)]);
     render(); return;
   }
   if (action === "close-privacy") { if (busy("privacy") || busy("connect")) return; ui.view = "settings"; await commit({ ...state, profile: { ...state.profile, privacyReviewVersion: 1 } }); return; }
@@ -1177,6 +1352,7 @@ async function handleAction(button, event) {
   if (action === "disconnect-gemini") {
     await setBusy("disconnect", async () => {
       gemini = await disconnectGemini();
+      aiPolicy = await getAIPolicy();
       ui.showGeminiForm = true;
       showToast(t("Gemini disconnected."));
     }).catch(error => showToast(error.message, "error"));
@@ -1239,6 +1415,7 @@ async function handleAction(button, event) {
     await setBusy("data", async () => {
     const replaced = await replaceAppData(createDefaultState(), null, true);
     state = replaced.state; learnedMemory = replaced.memory;
+    learningGuide = await getLearningGuide().catch(() => null); learningError = ""; ui.learningTopic = null;
     tracking = await getTracking().catch(() => null);
     await clearGeminiDiagnostics(true);
     diagnosticSettings = { includeText: false };
@@ -1310,6 +1487,11 @@ async function handleSubmit(form) {
   if (form.id.startsWith("activity-")) return activityUI.submit(form);
   const data = new FormData(form);
   if (busy("data")) return;
+  if (form.id === "ai-budget-form") {
+    if (busy("privacy")) return;
+    await setBusy("privacy", async () => { aiPolicy = await setAIPolicy({ dailyLimit: Number(data.get("dailyLimit")) }); ui.lastSortKey = ""; });
+    showToast(guideText("Automatic AI limit saved.", "Đã lưu giới hạn AI tự động.")); return;
+  }
   if (form.id === "privacy-site-form") {
     if (busy("privacy")) return;
     const url = String(data.get("origin") ?? "");
@@ -1333,7 +1515,7 @@ async function handleSubmit(form) {
   }
   if (form.id === "quick-focus-form") {
     if (["running", "paused", "ready"].includes(state.focus.status)) { ui.view = "today"; ui.focusMinimized = false; render(); return; }
-    const choice = nextFocus(state);
+    const choice = selectedFocus();
     const taskId = form.dataset.taskId || choice.task?.id || null;
     const blockId = form.dataset.blockId || choice.block?.id || null;
     const durationMinutes = Number(data.get("durationMinutes"));
@@ -1432,6 +1614,7 @@ async function handleSubmit(form) {
     const credentials = { apiKey: data.get("apiKey"), model: submittedModel(data), remember: data.get("remember") === "on" };
     await setBusy("connect", async () => {
       gemini = await connectGemini(credentials);
+      aiPolicy = await getAIPolicy();
       ui.modelDrafts = {};
       state.preferences.model = gemini.model;
       await commit(state);
@@ -1575,6 +1758,12 @@ function retainTaskDraft(input) {
 
 document.addEventListener("change", event => {
   const input = event.target;
+  if (input.dataset.bulkSite && ui.modal?.type === "local-extras") { ui.modal.origins = input.checked ? [...new Set([...ui.modal.origins, input.dataset.bulkSite])] : ui.modal.origins.filter(origin => origin !== input.dataset.bulkSite); return; }
+  if (input.id === "ai-mode") {
+    if (input.value === "automatic") { ui.modalReturnSelector = "#ai-mode"; ui.modal = { type: "automatic-ai" }; render(); }
+    else setBusy("privacy", async () => { aiPolicy = await setAIPolicy({ automaticEnabled: false }); ui.lastSortKey = ""; }).catch(error => showToast(error.message, "error"));
+    return;
+  }
   if (input.dataset.privacy) { changePrivacy(input.dataset.privacy, input.checked).catch(error => { render(); showToast(error.message, "error"); }); return; }
   if (activityUI.change(input)) return;
   retainTaskDraft(input);
@@ -1686,10 +1875,12 @@ document.addEventListener("input", event => {
 });
 
 document.addEventListener("keydown", event => {
+  if (trapDialogKey(event, document.querySelector('.learning-card[role="dialog"]') ?? document.querySelector('.modal[role="dialog"]'))) return;
   if (event.key !== "Escape") return;
-  if (busy("capture-save")) return;
+  if (busy("capture-save") || busy("privacy")) return;
+  if (ui.learningTour) { event.preventDefault?.(); void handleLearningAction("learning-pause", { dataset: {} }); return; }
   if (ui.modal) ui.modal = null;
-  else if (ui.omnibarOpen) { ui.omnibarOpen = false; ui.captureText = ""; }
+  else if (ui.omnibarOpen) { ui.omnibarOpen = false; ui.captureText = ""; ui.learningTopic = null; }
   else if (ui.zenMenu) ui.zenMenu = false;
   render();
 });
@@ -1704,11 +1895,16 @@ setInterval(async () => {
 async function bootstrap() {
   state = await loadState();
   state = await performTimerAction("reconcile");
-  [gemini, diagnosticSettings, learnedMemory, tracking] = await Promise.all([
+  learningGuide = await getLearningGuide().catch(() => {
+    learningError = guideText("Guide progress is unavailable. Try opening a guide again.", "Chưa đọc được tiến độ. Thử mở lại một hướng dẫn.");
+    return null;
+  });
+  [gemini, diagnosticSettings, learnedMemory, tracking, aiPolicy] = await Promise.all([
     getGeminiStatus().catch(() => ({ connected: false, remembered: false, available: false, model: state.preferences.model || DEFAULT_MODEL, lastTestAt: null })),
     getGeminiDiagnosticSettings().catch(() => null),
     getLearnedMemory().catch(() => null),
-    getTracking().catch(() => null)
+    getTracking().catch(() => null),
+    getAIPolicy().catch(() => null)
   ]);
   await activityUI.load();
   activityUI.observe();
@@ -1721,10 +1917,15 @@ async function bootstrap() {
     if (!ui.modal && !ui.omnibarOpen && !document.activeElement?.matches?.("input, textarea, select") && !activityUI.isEditing()) render();
   });
   observeDiagnosticSettings(next => { diagnosticSettings = next; render(); });
+  observeAIPolicy(next => {
+    if (next.day !== aiPolicy?.day || next.automaticEnabled !== aiPolicy?.automaticEnabled || next.dailyLimit !== aiPolicy?.dailyLimit) ui.lastSortKey = "";
+    aiPolicy = next;
+    if (!ui.modal && !ui.learningTour && !document.activeElement?.matches?.("input, textarea, select") && ["settings", "privacy"].includes(ui.view)) render();
+  });
   observeLearnedMemory(next => {
     learnedMemory = next;
     // Avoid resetting active forms when the background job publishes metadata.
-    if (ui.view === "settings") render();
+    if (ui.view === "settings" && !ui.modal && !ui.learningTour && !document.activeElement?.matches?.("input, textarea, select")) render();
   });
   render();
 }

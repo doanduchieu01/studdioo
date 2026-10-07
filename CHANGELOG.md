@@ -2,6 +2,26 @@
 
 Prototype milestone: **B2**. Numeric versions identify individual deliveries within the milestone. Newest releases appear first.
 
+## 0.14.0 — On-demand help and separate AI controls (2026-10-07)
+
+- Redesign Paper/Night surfaces, Today hierarchy and timer presentation with original visual elements. Add Choose another without changing the saved plan. Credit MD Studio and its reference apps in About.
+- Default new connections to Gemini 3.5 Flash-Lite while preserving explicit saved model choices.
+- Add a final local-extras toggle with a warning and exact site/permission review. Keep AI, key persistence and debug text separate. Cancel, denial and partial failures display saved state.
+- Add ten inactive media-site presets to Privacy and Activity, plus explicit Chrome site-access revocation. Updates cannot auto-grant added sites.
+- Add manual-only AI mode for new profiles, a separate automatic-mode confirmation and a serialized daily allowance shared by sorting, Activity and memory. Preserve existing automation opt-ins once; disconnect/restore pauses automation. Failed attempts count, manual requests remain separate, and existing feature limits still apply. Discard stale automatic responses after pause; keep unsent work retryable when the allowance runs out.
+- Replace action-driven lesson cards with optional invitations and user-started spotlight overlays. Nineteen bilingual explanations have Next/Back/Skip/Close, keyboard trapping, Escape, target fallback and reduced-motion support. Tour controls preserve underlying form drafts and never activate the highlighted feature.
+- Keep app schema 12; migrate guide metadata to version 2 and add separate AI-policy version 1. No new required permissions, analytics, website/backend deployment or Telegram integration.
+- Pass 407 automated cases using mocked Chrome/DOM and Gemini. Browser installation failed in the build environment; real browser visuals, permission prompts, media players and usability remain manual acceptance checks.
+
+## 0.13.0 — Progressive, interactive onboarding (2026-10-05)
+
+- Add nine contextual guides with fifteen bilingual steps: first task/focus, priorities/budget, scheduling, Activity, Insights, optional AI/personalization, privacy, Kanban and Smart Capture. Guidance appears as a feature is opened, not in one mandatory tour.
+- Show me where reveals and focuses the real target without clicking it. Guides are non-modal, skippable, pausable and replayable from Help & tours, with an independent automatic-tip preference. Escape pauses a lesson when no existing dialog/capture takes precedence. Automatic tips do not interrupt timers or post-session review.
+- Record basic milestones after successful task/timer/proposal actions. Information acknowledgments and skipped steps stay distinct. Existing app history seeds first-use progress once; explicit replays remain replayable.
+- Store bounded lesson IDs/states only in a separate local store. Serialize extension guide writes; preserve app data on guide-write failures. No guide data goes to AI, backups or telemetry. Backup restore preserves this device's progress; local-data erase resets it. App schema remains 12.
+- Keep privacy onboarding and consent independent. Opening or finishing a guide does not enable a feature, request permission, submit AI input, apply a schedule or complete a task. Required/optional Chrome permissions and host access are unchanged.
+- Add core, mocked-DOM and background regression tests, including progress persistence, bilingual text, replay, failed saves, concurrency, sender restrictions and consent boundaries. Installed-Chrome visual/permission QA remains a documented manual step.
+
 ## 0.12.0 — A simpler day and explicit privacy choices (2026-09-30)
 
 - Today now begins with one-field local capture and a direct, editable-duration focus start. Timer setup, budgets and scheduling remain available under a secondary disclosure. Gemini connection/model management stays in Settings.

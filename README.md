@@ -1,6 +1,6 @@
-# Stuđiô — Prototype B2 · v0.12.0
+# Stuđiô — Prototype B2 · v0.14.0
 
-This release simplifies the everyday flow: **write one task → start focus → optionally adjust or review**. Today offers quick local capture, a direct timer start, a compact summary and contextual recovery. A new privacy screen explains each optional feature, the data it uses and its Chrome permissions. Existing Activity, tasks, timers, Kanban, budgets, memory and English/Vietnamese remain available.
+This release makes guidance **on demand**, separates optional local collection from AI automation, and gives the daily flow a calmer visual hierarchy. Add one task, choose what fits now, and start focus. Contextual invitations open short spotlight tours only when requested. Core tools work with all optional features off. Existing Activity, tasks, timers, Kanban, budgets, memory and English/Vietnamese remain available.
 
 Observed browser time, confirmed time, task attribution and planned work remain separate. None establishes attention or task completion. The extension does not measure native apps or whole-device screen time. See [PRIVACY.md](PRIVACY.md) for the new optional data and permissions, [HUONG-DAN.md](HUONG-DAN.md) for Vietnamese instructions, and [INTEGRATION.md](INTEGRATION.md) for the future website/backend contract.
 
@@ -9,7 +9,7 @@ Observed browser time, confirmed time, task attribution and planned work remain 
 1. For an existing installation, export a backup and close the panel.
 2. Extract this ZIP and replace files in your existing unpacked extension folder.
 3. Open `chrome://extensions` and click **Reload** for Stuđiô. Do not remove the extension first.
-4. Reopen the panel and confirm Settings shows **v0.12.0**.
+4. Reopen the panel and confirm Settings shows **v0.14.0**.
 
 For a new installation: enable Developer mode, choose **Load unpacked**, select `Studio-Prototype-B2-Chrome-Extension`, and click its toolbar icon. Chrome 116 or newer is required. No build step or third-party runtime packages are needed.
 
@@ -17,7 +17,21 @@ App schema **12** imports older backups and preserves tasks, timer history, Kanb
 
 Start with [TESTING.md](TESTING.md) for a short walkthrough.
 
-## New in v0.12.0 — Everyday flow and privacy
+## New in v0.14.0
+
+- **Calmer daily flow.** A warm Paper theme for new profiles, readable Night theme, original circular focus mark, larger timer, and a single next-task card. **Choose another** changes the proposed focus task without starting a timer or moving the plan. Open tasks and additional tools sit behind disclosures. Existing theme choices remain unchanged.
+- **Design credit.** Settings → About & credits links MD Studio, OffScreen, MD Clock and MD Vinyl as inspiration for hierarchy and everyday detail. Stuđiô uses its own graphics and implementation; no affiliation or endorsement is implied.
+- **Local extras are separate from AI.** The final onboarding privacy control opens a warning before enabling browser tracking, titles/resource IDs, media signals, background listening and reminders. Review the selectable site list, then approve the exact Chrome permissions. Cancel/denial retains saved choices; partial writes display the resulting mixed state. Disabling pauses extras while keeping history and browser grants. Per-feature switches remain available.
+- **Ten inactive media presets.** YouTube, YouTube Music, Spotify, SoundCloud, Apple Music, Apple Podcasts, Pocket Casts, Vimeo, Zing MP3 and NhacCuaTui are ready to select in Privacy and Activity settings. Presets do not grant access automatically, and later additions never inherit approval. Detection varies by player; playback is not proof of attention. Privacy also offers explicit Chrome site-grant revocation.
+- **Gemini 3.5 Flash-Lite default.** New connections use `gemini-3.5-flash-lite`; saved model choices, including custom IDs, remain intact. Use & test model explicitly switches an existing connection. No automatic fallback or provider-quota promise is made.
+- **Only when I ask.** New AI setups default to manual requests. Settings → AI on your terms has a separately confirmed automatic mode; each sorting, Activity AI and memory-learning switch must also be enabled. Existing explicit automation choices migrate once. Disconnecting or restoring data pauses automatic mode. Connecting a key does not itself opt in.
+- **One shared automatic-AI allowance.** Default 3 attempts per device-local day, adjustable from 0–100. Sorting, Activity and memory use one serialized counter; failures count. Manual requests and connection tests do not use this allowance. Existing Activity/memory feature caps remain. A zero allowance pauses automatic requests; local rules and tools still work. This is an app limit, not Google's remaining quota.
+- **User-started spotlight tours.** Nine guides contain nineteen explanations (2–3 per area). An invitation appears when entering an unexplored area; **Explain this screen** opens the overlay. Next, Back, Skip and Close never require task creation, a timer, AI or a permission. The target is highlighted; controls stay inactive beneath the overlay. Missing controls are explained without creating data. Escape closes the tour and preserves underlying form drafts.
+- **Help remains available.** The `?` button opens Help & tours to resume/replay and disable invitations. Invitations wait during focus and post-session review. Existing guide preferences and progress migrate; ordinary task/timer actions no longer advance a tour. Guide metadata stays local and outside AI, telemetry and backups. App schema remains 12.
+
+Automated checks use simulated browser APIs and mocked Gemini. See TESTING.md for the installed-Chrome visual, keyboard, permission and usability checks still required; this release has not been validated with real users.
+
+## Included from v0.12.0 — Everyday flow and privacy
 
 - New users can choose **Start with simple defaults**, then continue from the privacy screen with every optional feature off. Personalization remains available. No API key or optional Chrome grant is required for local task/timer use.
 - Add a task with only a title. Its estimate defaults to the configured focus interval and can be edited later. The main **Start focus** action begins one interval directly; its duration is visible and editable. It prefers today's next scheduled block, then a task picked for today, then an open task. It never starts automatically or replaces a running/paused timer. **Timer options** retains Pomodoro and detailed setup.
@@ -217,15 +231,15 @@ Choose **Custom model ID…** to reveal an editable ID field in either setup or 
 
 | Model ID | Catalog role |
 | --- | --- |
-| `gemini-3.1-flash-lite` | Unchanged default |
-| `gemini-3.5-flash-lite` | Newer Flash-Lite |
+| `gemini-3.5-flash-lite` | New connection default |
+| `gemini-3.1-flash-lite` | Earlier Flash-Lite option |
 | `gemini-3.8-flash` | Latest listed Flash |
 | `gemini-3.7-flash` | Flash alternative |
 | `gemini-3.6-flash` | Earlier Flash |
 | `gemini-2.5-flash` | 2.5 Flash |
 | `gemini-2.5-flash-lite` | 2.5 Flash-Lite |
 
-Checked 2026-09-10 against Google's [standard text pricing](https://ai.google.dev/gemini-api/docs/pricing) and [Interactions supported models](https://ai.google.dev/gemini-api/docs/interactions-overview). Availability/quota depend on the project. A free-tier listing does not guarantee access or free usage on a billing-enabled project. A custom model ID remains available in the connection form.
+Checked 2026-10-07 against Google's [standard text pricing](https://ai.google.dev/gemini-api/docs/pricing), [3.5 Flash-Lite documentation](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite) and [Interactions supported models](https://ai.google.dev/gemini-api/docs/interactions-overview). Availability/quota depend on the project. A free-tier listing does not guarantee access or free usage on a billing-enabled project. A custom model ID remains available in the connection form.
 
 ## Privacy and diagnostics
 
@@ -237,7 +251,7 @@ Keys use Chrome session storage unless **Remember on this device** is enabled. T
 
 **Include prompt and custom instructions in debug reports** is off by default. When on, future reports may contain prompts (including learning evidence), enabled instructions, selected memories, and provider error messages. Keys are redacted and truncation is marked. Complete provider bodies, headers, and model output are excluded. Turning it off purges debug text and prevents in-flight attempts from restoring it. Old exported files are unaffected.
 
-Reproduce a Gemini problem once on v0.12.0, export the JSON, and attach it to the development chat. Enable debug text beforehand only if you want to share that content. Older metadata-only attempts cannot gain missing text retroactively. For tracking issues, describe the tab/window/idle sequence and expected versus shown time; Gemini diagnostics deliberately contain no browsing data.
+Reproduce a Gemini problem once on v0.14.0, export the JSON, and attach it to the development chat. Enable debug text beforehand only if you want to share that content. Older metadata-only attempts cannot gain missing text retroactively. For tracking issues, describe the tab/window/idle sequence and expected versus shown time; Gemini diagnostics deliberately contain no browsing data.
 
 ## Verification and numbering
 

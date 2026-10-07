@@ -22,7 +22,8 @@ test("default state uses the current schema and starts locally empty", () => {
   assert.equal(state.profile.experience, null);
   assert.equal(state.profile.aim, null);
   assert.equal(state.profile.geminiSetup, null);
-  assert.equal(state.preferences.model, "gemini-3.1-flash-lite");
+  assert.equal(state.preferences.model, "gemini-3.5-flash-lite");
+  assert.equal(state.preferences.theme, "paper");
 });
 
 test("old fake onboarding defaults migrate back to unselected choices", () => {

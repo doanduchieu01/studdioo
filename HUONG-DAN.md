@@ -1,8 +1,27 @@
-# Stuđiô v0.12.0
+# Stuđiô v0.14.0
 
 1. Sao lưu dữ liệu, đóng bảng tiện ích.
 2. Giải nén và thay tệp trong thư mục tiện ích cũ. Mở `chrome://extensions`, bấm **Tải lại**. Không gỡ tiện ích.
 3. Mở **Settings → Language / Ngôn ngữ → Tiếng Việt**.
+
+## Hướng dẫn khi cần
+
+- Sau bước riêng tư, chỉ hiện một lời mời nhỏ. Chọn **Giải thích màn hình** để mở lớp hướng dẫn theo khu vực đang dùng. Không tự mở lớp phủ khi chuyển màn hình.
+- Có chín hướng dẫn, tổng cộng mười chín phần giải thích, mỗi khu vực 2–3 bước. **Tiếp**, **Trước**, **Bỏ qua bước** và **Đóng hướng dẫn** không yêu cầu thêm việc, chạy đồng hồ, gọi AI hay cấp quyền.
+- Lớp hướng dẫn làm nổi điều khiển liên quan và giải thích chức năng. Tab/Shift+Tab di chuyển trong hướng dẫn; Escape đóng rồi trả tiêu điểm về nút mở. Điều khiển phía dưới không được kích hoạt. Nếu chưa có điều khiển, có thể tiếp tục mà không tạo dữ liệu.
+- **Để sau** tạm ẩn lời mời của khu vực đó. Nút `?` → **Trợ giúp & hướng dẫn** cho phép xem lại hoặc tắt lời mời. Luôn có thể mở thủ công; lời mời tự động tạm ẩn trong phiên tập trung và sau phiên.
+- Bản nháp biểu mẫu phải được giữ khi mở, chuyển bước hoặc đóng hướng dẫn. Tiến độ chỉ lưu trên máy, không gửi AI hay vào sao lưu; giữ tiến độ cũ khi nâng cấp. Thao tác công việc thật không tự hoàn tất bước hướng dẫn. Xóa dữ liệu ứng dụng đặt lại tiến độ.
+
+## Tính năng trên máy và AI là hai lựa chọn riêng
+
+1. Cuối màn hình riêng tư có **Bật các tính năng bổ sung trên máy**. Công tắc mở cảnh báo trước: đọc mục đích, dữ liệu lưu trong 7 ngày, quyền cần dùng và chọn các trang muốn cho phép. Chỉ khi xác nhận mới hiện hộp xin quyền Chrome. Hủy hoặc từ chối không bật tính năng. Trạng thái bật một phần được hiển thị rõ.
+2. Nhóm này gồm ghi nhận phiên, tiêu đề/tài nguyên, tín hiệu media theo trang, ước tính nghe nền và nhắc việc. Không bật AI, chia sẻ hướng dẫn/bộ nhớ, lưu khóa hay nội dung báo cáo lỗi. Tắt giữ lịch sử và quyền Chrome đã cấp; có nút **Thu hồi quyền** riêng cho từng trang.
+3. Danh sách có sẵn YouTube, YouTube Music, Spotify, SoundCloud, Apple Music, Apple Podcasts, Pocket Casts, Vimeo, Zing MP3 và NhacCuaTui. Mỗi trang ban đầu chưa được cấp quyền. Trang thêm trong bản cập nhật không tự được cho phép. Khả năng đọc trạng thái tùy trình phát; không khẳng định sự chú ý.
+4. Kết nối Gemini mới dùng **3.5 Flash-Lite**, ở chế độ **Chỉ khi yêu cầu**. Lựa chọn mô hình đã lưu vẫn giữ; đổi tại **Dùng và kiểm tra mô hình**. Không tự đổi mô hình khi lỗi.
+5. Trong **Cài đặt → AI theo lựa chọn riêng**, chế độ tự động cần xác nhận cảnh báo; từng tính năng phân loại, gán nhãn hoạt động và học ghi nhớ vẫn bật riêng. Các lựa chọn tự động đã có được chuyển tiếp một lần. Ngắt kết nối hoặc khôi phục sao lưu sẽ tắt chế độ tự động.
+6. Ba tính năng dùng chung giới hạn mặc định **3 lượt tự động/ngày**, chỉnh từ 0–100. Lỗi vẫn tính; đặt 0 để dừng. Yêu cầu thủ công và kiểm tra kết nối tính riêng; giới hạn từng tính năng vẫn áp dụng. Đây là giới hạn trong ứng dụng, không phải hạn mức Google còn lại. Giới hạn/số lượt trong ngày được giữ khi khôi phục hoặc xóa dữ liệu ứng dụng.
+
+Giao diện mới ưu tiên một việc tiếp theo; **Chọn việc khác** đổi lựa chọn mà không chạy đồng hồ hay di chuyển lịch. Mục **Giới thiệu & ghi nhận** nêu cảm hứng từ MD Studio, OffScreen, MD Clock và MD Vinyl; hình ảnh và mã nguồn của Stuđiô được tạo riêng. Dự án độc lập.
 
 ## Bắt đầu và quyền riêng tư
 

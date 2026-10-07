@@ -12,15 +12,32 @@ import { proposeSchedule } from "../src/core/scheduler.js";
 async function bootApp(initialState = null, extraStores = {}) {
   const store = new Map(Object.entries(extraStores).map(([key,value])=>[key,JSON.stringify(value)]));
   if (initialState) store.set("studioPreviewState", JSON.stringify(initialState));
+  let appMarkup = "", appRenders = 0;
   const app = {
-    innerHTML: "",
+    get innerHTML() { return appMarkup; },
+    set innerHTML(value) { appRenders += 1; appMarkup = value; },
     className: "app-loading",
     querySelector() { return null; }
   };
   const toast = { innerHTML: "" };
+  const learningSlot = {
+    set innerHTML(value) {
+      const start = appMarkup.indexOf('<div id="learning-slot">') + '<div id="learning-slot">'.length;
+      const end = appMarkup.indexOf('</div><!-- learning-slot-end -->', start);
+      assert.ok(end >= start);
+      appMarkup = appMarkup.slice(0, start) + value + appMarkup.slice(end);
+    }
+  };
+  const overlayHost = { set innerHTML(value) {
+    const start = appMarkup.indexOf('<div id="learning-overlay-host">') + '<div id="learning-overlay-host">'.length;
+    const end = appMarkup.indexOf('</div><!-- learning-overlay-end -->', start);
+    assert.ok(end >= start);
+    appMarkup = appMarkup.slice(0, start) + value + appMarkup.slice(end);
+  } };
   const fields = new Map(["#memory-count", "#memory-draft-status", "#memory-discard"].map(id => [id, { textContent: "", disabled: true }]));
   const listeners = new Map();
   let rejectSave = false;
+  let rejectGuideSave = false;
   let networkCalls = 0;
   const originalInterval = globalThis.setInterval;
   const originalTimeout = globalThis.setTimeout;
@@ -32,7 +49,7 @@ async function bootApp(initialState = null, extraStores = {}) {
     configurable: true,
     value: {
       getItem(key) { return store.get(key) ?? null; },
-      setItem(key, value) { if (rejectSave) throw new Error("Test storage is full."); store.set(key, String(value)); },
+      setItem(key, value) { if (rejectSave || rejectGuideSave && key === "studioLearningGuide") throw new Error("Test storage is full."); store.set(key, String(value)); },
       removeItem(key) { store.delete(key); }
     }
   });
@@ -41,7 +58,7 @@ async function bootApp(initialState = null, extraStores = {}) {
     value: {
       documentElement: { dataset: {} },
       body: { append() {} },
-      querySelector(selector) { return selector === "#app" ? app : selector === "#toast-region" ? toast : fields.get(selector) ?? null; },
+      querySelector(selector) { return selector === "#app" ? app : selector === "#toast-region" ? toast : selector === "#learning-slot" && appMarkup.includes('id="learning-slot"') ? learningSlot : selector === "#learning-overlay-host" && appMarkup.includes('id="learning-overlay-host"') ? overlayHost : fields.get(selector) ?? null; },
       addEventListener(type, handler) { listeners.set(type, handler); },
       createElement() { return { click() {}, remove() {} }; }
     }
@@ -64,7 +81,9 @@ async function bootApp(initialState = null, extraStores = {}) {
     fields,
     listeners,
     rejectSaves(value) { rejectSave = value; },
+    rejectGuideSaves(value) { rejectGuideSave = value; },
     networkCalls() { return networkCalls; },
+    renderCount() { return appRenders; },
     stored(key) { return JSON.parse(store.get(key) ?? "null"); },
     savedState() {
       const value = store.get("studioPreviewState");
@@ -102,6 +121,255 @@ function activitySample() {
   const activity={settings:{details:true},sessions:[{id:"review-1",revision:1,closed:true,segments:[{host:"study.example",title:"Activity",resource:"https://study.example/chapter",startAt:start,endAt:end,kind:"reading",uncertain:true,reasons:["visible_no_input"]}],suggestions:[{source:"local",taskId:state.tasks[0].id,reasons:['<img src=x onerror="alert(1)">']}]}]};
   return {state,activity};
 }
+
+function newLearner(language = "en") {
+  const state = createDefaultState();
+  state.profile.onboardingComplete = true;
+  state.preferences.language = language;
+  return state;
+}
+
+test("Choose another changes the focus choice without changing tasks or starting early",async()=>{
+  let state=addTask(newLearner(),{title:"First task"}).state;
+  state=addTask(state,{title:"Second <task>"}).state;
+  const browser=await bootApp(state);
+  try{
+    const before=browser.savedState(),chosen=before.tasks.find(task=>task.title==="Second <task>");
+    await browser.click("choose-focus");assert.match(browser.app.innerHTML,/What fits right now/);
+    await browser.click("select-focus",null,{taskId:chosen.id});
+    assert.deepEqual(browser.savedState(),before);assert.match(browser.app.innerHTML,/Second &lt;task&gt;/);
+    await browser.submit("quick-focus-form",{durationMinutes:"10"});
+    assert.equal(browser.savedState().focus.taskId,chosen.id);assert.equal(browser.savedState().focus.plannedSeconds,600);
+    assert.equal(browser.networkCalls(),0);
+  }finally{browser.cleanup();}
+});
+
+test("About credits MD Studio and the reference apps in English and Vietnamese",async()=>{
+  for(const language of ["en","vi"]){
+    const browser=await bootApp(newLearner(language));
+    try{
+      await browser.click("go-settings");await browser.click("open-about");
+      assert.match(browser.app.innerHTML,/MD Studio/);assert.match(browser.app.innerHTML,/OffScreen/);assert.match(browser.app.innerHTML,/MD Clock/);assert.match(browser.app.innerHTML,/MD Vinyl/);
+      assert.match(browser.app.innerHTML,/apps.apple.com\/app\/id1474340105/);
+      assert.match(browser.app.innerHTML,language==="vi"?/Dự án độc lập/:/independent project/);
+      assert.equal(browser.networkCalls(),0);
+    }finally{browser.cleanup();}
+  }
+});
+
+test("guide opens only on demand and explanations require no task or timer", async () => {
+  const browser = await bootApp(newLearner());
+  try {
+    assert.match(browser.app.innerHTML, /Explain this screen/);
+    assert.doesNotMatch(browser.app.innerHTML, /class="learning-overlay"/);
+    await browser.click("learning-next"); // An unopened tour cannot be advanced.
+    assert.deepEqual(browser.stored("studioLearningGuide").steps, {});
+    await browser.click("learning-start");
+    assert.match(browser.app.innerHTML, /Add one thing to do/);
+    await browser.click("learning-next");
+    assert.equal(browser.stored("studioLearningGuide").steps["basics.add"], "done");
+    assert.match(browser.app.innerHTML, /Start when you are ready/);
+    await browser.click("learning-back");
+    assert.match(browser.app.innerHTML, /Add one thing to do/);
+    await browser.click("learning-next");
+    await browser.click("learning-next");
+    assert.equal(browser.stored("studioLearningGuide").steps["basics.focus"], "done");
+    assert.equal(browser.savedState().tasks.length, 0);
+    assert.equal(browser.savedState().focus.status, "idle");
+    await browser.submit("quick-task-form", { title: "Read chapter one" });
+    await browser.submit("quick-focus-form", { durationMinutes: "5" });
+    assert.equal(browser.savedState().tasks[0].status, "inbox");
+    assert.doesNotMatch(browser.app.innerHTML, /class="learning-overlay"/);
+    await browser.click("minimize-timer");
+    await browser.click("navigate", null, { view: "activity" });
+    assert.doesNotMatch(browser.app.innerHTML, /class="learning-overlay"/);
+    assert.equal(browser.networkCalls(), 0);
+  } finally { browser.cleanup(); }
+});
+
+test("task saves are independent of guide saves; failed guide writes keep the current step", async () => {
+  const browser = await bootApp(newLearner());
+  try {
+    browser.rejectSaves(true);
+    await browser.submit("quick-task-form", { title: "Keep this task" });
+    assert.equal(browser.savedState().tasks.length, 0);
+    assert.deepEqual(browser.stored("studioLearningGuide").steps, {});
+    browser.rejectSaves(false);
+    browser.rejectGuideSaves(true);
+    await browser.submit("quick-task-form", { title: "Keep this task" });
+    assert.equal(browser.savedState().tasks.length, 1);
+    assert.deepEqual(browser.stored("studioLearningGuide").steps, {});
+    assert.doesNotMatch(browser.toast.innerHTML, /Guide progress could not be saved/);
+    browser.rejectGuideSaves(false);
+    await browser.click("learning-start");
+    browser.rejectGuideSaves(true);
+    await browser.click("learning-next");
+    assert.match(browser.toast.innerHTML, /Guide progress could not be saved/);
+    assert.match(browser.app.innerHTML, /Add one thing to do/);
+    browser.rejectGuideSaves(false);
+    await browser.click("learning-skip");
+    assert.equal(browser.stored("studioLearningGuide").steps["basics.add"], "skipped");
+    assert.match(browser.app.innerHTML, /Start when you are ready/);
+  } finally { browser.cleanup(); }
+});
+
+test("contextual lessons follow navigation without activating optional features", async () => {
+  const browser = await bootApp(newLearner());
+  try {
+    const before = browser.savedState();
+    await browser.click("navigate", null, { view: "plan" });
+    assert.doesNotMatch(browser.app.innerHTML, /class="learning-overlay"/);
+    await browser.click("learning-start");
+    assert.match(browser.app.innerHTML, /Decide what matters/);
+    await browser.click("learning-next");
+    assert.match(browser.app.innerHTML, /Leave room in today/);
+    await browser.click("navigate", null, { view: "activity" });
+    await browser.click("learning-start");
+    assert.match(browser.app.innerHTML, /You choose what is recorded/);
+    await browser.click("learning-next");
+    assert.match(browser.app.innerHTML, /Read estimates as estimates/);
+    await browser.click("navigate", null, { view: "insights" });
+    await browser.click("learning-start");
+    assert.match(browser.app.innerHTML, /Notice the pattern/);
+    await browser.click("go-settings");
+    await browser.click("learning-start");
+    assert.match(browser.app.innerHTML, /Connect AI only if useful/);
+    await browser.click("open-privacy");
+    await browser.click("learning-start");
+    assert.match(browser.app.innerHTML, /Read before switching on/);
+    await browser.click("learning-next");
+    assert.equal(browser.stored("studioLearningGuide").steps["privacy.choices"], "done");
+    assert.doesNotMatch(browser.app.innerHTML, /data-privacy="[^"]+"[^>]*checked/);
+    assert.equal(browser.stored("studioActivity")?.settings?.enabled ?? false, false);
+    assert.deepEqual(browser.savedState().preferences, before.preferences);
+    assert.deepEqual(browser.savedState().memory, before.memory);
+    assert.equal(browser.savedState().kanban.enabled, false);
+    assert.equal(browser.networkCalls(), 0);
+  } finally { browser.cleanup(); }
+});
+
+test("guide pause, skip and opt-out persist; manual resume works with automatic tips off", async () => {
+  let browser = await bootApp(newLearner());
+  try {
+    await browser.click("learning-start");
+    await browser.click("learning-skip");
+    await browser.click("learning-pause");
+    assert.doesNotMatch(browser.app.innerHTML, /class="learning-card"/);
+    const saved = browser.savedState(), guide = browser.stored("studioLearningGuide");
+    browser.cleanup(); browser = await bootApp(saved, { studioLearningGuide: guide });
+    assert.doesNotMatch(browser.app.innerHTML, /class="learning-card"/);
+    await browser.click("learning-open");
+    assert.match(browser.app.innerHTML, /2 short explanations/);
+    await browser.click("learning-enabled");
+    assert.equal(browser.stored("studioLearningGuide").enabled, false);
+    await browser.click("learning-resume", null, { topic: "basics" });
+    assert.match(browser.app.innerHTML, /Start when you are ready/);
+    await browser.click("navigate", null, { view: "activity" });
+    assert.doesNotMatch(browser.app.innerHTML, /class="learning-card"/);
+    await browser.click("learning-open");
+    await browser.click("learning-replay", null, { topic: "basics" });
+    assert.match(browser.app.innerHTML, /Add one thing to do/);
+    assert.deepEqual(browser.stored("studioLearningGuide").steps, {});
+    assert.equal(browser.stored("studioLearningGuide").enabled, false);
+    assert.deepEqual(browser.savedState(), saved);
+  } finally { browser.cleanup(); }
+});
+
+test("Escape pauses a lesson, and manual guides never enable Kanban or submit Smart Capture", async () => {
+  const browser = await bootApp(newLearner());
+  try {
+    await browser.click("learning-start");
+    browser.listeners.get("keydown")({ key: "Escape" }); await delay(20);
+    assert.deepEqual(browser.stored("studioLearningGuide").pausedTopics, ["basics"]);
+    await browser.click("learning-open");
+    await browser.click("learning-resume", null, { topic: "kanban" });
+    assert.match(browser.app.innerHTML, /Move work at your pace/);
+    assert.equal(browser.savedState().kanban.enabled, false);
+    await browser.click("learning-next");
+    await browser.click("learning-open");
+    await browser.click("learning-resume", null, { topic: "capture" });
+    assert.match(browser.app.innerHTML, /id="capture-input"/);
+    assert.equal(browser.savedState().tasks.length, 0);
+    browser.listeners.get("keydown")({ key: "Escape" }); await delay(20);
+    assert.match(browser.app.innerHTML, /id="capture-input"/); // Closing the tour preserves the form.
+    assert.doesNotMatch(browser.app.innerHTML, /class="learning-overlay"/);
+    assert.deepEqual(browser.stored("studioLearningGuide").pausedTopics, ["basics", "capture"]);
+    assert.equal(browser.networkCalls(), 0);
+  } finally { browser.cleanup(); }
+});
+
+test("guide is deferred until privacy onboarding finishes and supports Vietnamese", async () => {
+  const state = createDefaultState(); state.preferences.language = "vi";
+  const browser = await bootApp(state);
+  try {
+    assert.doesNotMatch(browser.app.innerHTML, /class="learning-card"/);
+    await browser.click("onboarding-defaults");
+    assert.doesNotMatch(browser.app.innerHTML, /class="learning-card"/);
+    await browser.click("finish-onboarding");
+    assert.doesNotMatch(browser.app.innerHTML, /class="learning-overlay"/);
+    await browser.click("learning-start");
+    assert.match(browser.app.innerHTML, /Thêm một việc cần làm/);
+    assert.match(browser.app.innerHTML, /Đóng hướng dẫn/);
+    await browser.click("learning-open");
+    assert.match(browser.app.innerHTML, /id="learning-center-title">Trợ giúp &(?:amp;)? hướng dẫn/);
+    assert.match(browser.app.innerHTML, /Tắt lời mời/);
+    assert.equal(browser.networkCalls(), 0);
+  } finally { browser.cleanup(); }
+});
+
+test("guide defers the usage-based AI invitation until later ordinary navigation", async () => {
+  const state = createDefaultState(new Date(Date.now() - 8 * 86400000));
+  state.profile.onboardingComplete = true;
+  state.aiUsage.days = [{ date: localDateKey(new Date(Date.now() - 86400000)), count: 21 }];
+  const browser = await bootApp(state);
+  try {
+    assert.match(browser.app.innerHTML, /Explain this screen/);
+    assert.doesNotMatch(browser.app.innerHTML, /planning-prompt-title/);
+    assert.equal(browser.savedState().aiUsage.promptSeenAt, null);
+    await browser.click("learning-pause");
+    assert.doesNotMatch(browser.app.innerHTML, /planning-prompt-title/);
+    await browser.click("navigate", null, { view: "today" });
+    assert.match(browser.app.innerHTML, /planning-prompt-title/);
+    assert.equal(browser.savedState().preferences.planningEnabled, false);
+    assert.equal(browser.networkCalls(), 0);
+  } finally { browser.cleanup(); }
+});
+
+test("advancing tips preserves surrounding forms and Not now does not chain another topic", async () => {
+  const browser = await bootApp(newLearner());
+  try {
+    await browser.click("navigate", null, { view: "plan" });
+    await browser.click("learning-start");
+    const renders = browser.renderCount();
+    await browser.click("learning-next");
+    assert.equal(browser.renderCount(), renders);
+    assert.match(browser.app.innerHTML, /Leave room in today/);
+    await browser.click("learning-skip");
+    assert.equal(browser.renderCount(), renders);
+    assert.doesNotMatch(browser.app.innerHTML, /class="learning-card"/);
+    await browser.click("learning-open");
+    await browser.click("learning-resume", null, { topic: "kanban" });
+    assert.match(browser.app.innerHTML, /Move work at your pace/);
+    await browser.click("learning-pause");
+    assert.doesNotMatch(browser.app.innerHTML, /class="learning-card"|Connect AI only if useful/);
+    await browser.click("navigate", null, { view: "settings" });
+    assert.doesNotMatch(browser.app.innerHTML, /class="learning-overlay"/);
+    await browser.click("learning-start");
+    assert.match(browser.app.innerHTML, /Connect AI only if useful/);
+  } finally { browser.cleanup(); }
+});
+
+test("erase local data clears guide progress and its automatic-tip preference", async () => {
+  const browser = await bootApp(newLearner(), { studioLearningGuide: { enabled: false, steps: { "basics.add": "done" }, pausedTopics: ["activity"] } });
+  try {
+    await browser.click("go-settings");
+    await browser.click("ask-reset");
+    await browser.click("confirm-reset");
+    assert.deepEqual(browser.stored("studioLearningGuide"), { version: 2, enabled: true, steps: {}, pausedTopics: [] });
+    assert.equal(browser.savedState().profile.onboardingComplete, false);
+    assert.doesNotMatch(browser.app.innerHTML, /class="learning-card"/);
+  } finally { browser.cleanup(); }
+});
 test("Activity review assigns reusable labels, preserves estimates and supports Undo through the UI",async()=>{
   const {state,activity}=activitySample(),browser=await bootApp(state,{studioActivity:activity});
   try{
@@ -507,15 +775,16 @@ test("eligible planning prompt appears once, respects dismissal, and enables onl
   const now = new Date(), start = new Date(now.getTime() - 8 * 86400000), yesterday = new Date(now.getTime() - 86400000);
   const state = createDefaultState(start); state.profile.onboardingComplete = true;
   state.aiUsage.days = [{ date: `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, "0")}-${String(yesterday.getDate()).padStart(2, "0")}`, count: 21 }];
-  let browser = await bootApp(state);
+  const tipsOff = { studioLearningGuide: { enabled: false } };
+  let browser = await bootApp(state, tipsOff);
   try {
     assert.match(browser.app.innerHTML, /planning-prompt-title/);
     assert.equal(browser.savedState().preferences.planningEnabled, false);
     await browser.click("close-modal");
     assert.doesNotMatch(browser.app.innerHTML, /planning-prompt-title/);
-    const dismissed = browser.savedState(); browser.cleanup(); browser = await bootApp(dismissed);
+    const dismissed = browser.savedState(); browser.cleanup(); browser = await bootApp(dismissed, tipsOff);
     assert.doesNotMatch(browser.app.innerHTML, /planning-prompt-title/);
-    browser.cleanup(); browser = await bootApp(state);
+    browser.cleanup(); browser = await bootApp(state, tipsOff);
     await browser.click("enable-planning");
     assert.equal(browser.savedState().preferences.planningEnabled, true);
     assert.match(browser.app.innerHTML, /guide-help-form/);

@@ -1,10 +1,35 @@
-# v0.12.0 — quick test drive
+# v0.14.0 — quick test drive
 
-Export both the task backup and, if used, the separate Activity backup. Replace files in the same unpacked extension folder, reload at `chrome://extensions`, and confirm Settings shows **v0.12.0**. Do not remove the extension or clear its data.
+Export both the task backup and, if used, the separate Activity backup. Replace files in the same unpacked extension folder, reload at `chrome://extensions`, and confirm Settings shows **v0.14.0**. Do not remove the extension or clear its data.
 
-## v0.12.0 automated verification
+## v0.14.0 automated verification
 
-Run `npm run verify` with Node.js 20 or newer. The release suite covers 362 cases, using simulated Chrome/DOM APIs and mocked Gemini. No live AI quota was used. Chrome is not installed in the release environment: actual permissions, player signals, OS notifications, browser sleep behavior and visual layout are manual acceptance checks below, not claimed as live-tested. Passing code tests does not establish that users experience the product as effortless.
+Run `npm run verify` with Node.js 20 or newer. The release suite covers 407 cases using simulated Chrome/DOM APIs and mocked Gemini. No live AI quota was used. Both headless-shell and full Chromium downloads failed with invalid/truncated archives in the release environment. Actual permissions, player signals, OS notifications, browser sleep, screen-reader output and visual layout remain manual acceptance checks below. Passing code tests does not establish that users experience the product as effortless.
+
+## Progressive-guide acceptance checks
+
+1. Finish privacy onboarding with optional features off. Only a small invitation should appear. Open **Explain this screen**: the overlay highlights task entry. Next advances without entering anything, and Done closes without starting a timer. Ordinary task/timer actions must not advance the guide.
+2. Visit Plan, Schedule, Activity, Insights, Settings, Privacy and Smart Capture. Each may offer help, but none should open an overlay automatically. Explicitly open each tour; Next/Back/Skip must work. Missing targets or disabled controls explain the state without adding data or enabling features.
+3. Dismiss an invitation, navigate away/back, then reopen the panel: the topic stays paused. Resume/replay through `?` → Help & tours. Turn invitations off: manual Explain this screen and Help remain usable. Enter an unsaved budget, open its tour, advance/back/skip/close: the form and value must survive. Closing a manually opened Kanban tour must not immediately start a Settings tour.
+4. Upgrade with saved v0.13 guide progress/preferences: retain them. Tasks and timers never fabricate new progress. Restoring an app backup preserves device-local guide state; Erase local data on a disposable profile resets it.
+5. Test English/Vietnamese, Paper/Night, 300/320/400px and wide panels, 200% zoom, reduced motion and keyboard-only use. The tour card must stay visible/scrollable; its target must remain visible when space permits. Tab/Shift+Tab stay inside the tour, Escape closes it first, and focus returns to its opener or Explain control. Background controls are inert. Closing a Smart Capture tour must keep the unsent capture text.
+6. Start/pause a timer, reach a waiting Pomodoro phase and end a session: automatic invitations stay hidden. Explicitly opened help never stops the timer. The usage-based planning invitation must not stack with a tour or first-use invitation.
+7. With optional features off, explore every guide, including Kanban after dismissing its original offer. Confirm no permission prompt, AI request, feature opt-in, task completion or schedule change. Tours never activate their highlighted controls.
+8. Fail a guide write: Next must remain on the same step and report the failure; Close must still close. Task/timer saves remain independent. Concurrent panels must preserve unrelated guide progress. Content-script senders cannot access guide messages. These logic boundaries are covered by automated mocks; real browser focus remains a manual check.
+
+## Local extras, AI and visual acceptance
+
+1. At the end of privacy onboarding, toggle **Enable all local extras**. The review overlay must show purpose, local retention, exact site choices, permissions, and the separate AI boundary before any native permission request. Cancel preserves settings. Confirm requests only tabs/idle/notifications plus scripting and selected sites. Denial must not report success.
+2. Select no sites: no host or scripting grant should be requested; the summary remains mixed because media stays off. Select one: only that origin is requested. Later-added catalogue entries remain inactive. Existing individually allowed sites are explicitly retained. Pause local extras: history is kept; background collection stops. Try Revoke access on one site and verify Chrome removes its grant.
+3. Simulate one failing store during bulk enabling. The panel must refresh actual state and show a partial/mixed result, with an error. It must never imply a transaction succeeded across all stores.
+4. A new Gemini connection selects 3.5 Flash-Lite, has manual-only mode, and does not enable collection or automatic features. Existing saved custom/older models remain. Opening/cancelling the automatic-mode warning sends nothing. Enabling this mode alone still enables no individual AI feature.
+5. Set the shared automatic allowance to 1, enable an automatic feature, and trigger one mocked request. A second automatic request must stop; failures count. A manual request remains usable, subject to existing Activity/memory caps. Set 0 to pause. Raising/lowering the limit must preserve today's used count. Check local midnight reset and two panels competing for the last slot. No real API quota is needed for the automated suite.
+6. Pause AI while an automatic request is held in flight: its response must not change task labels/memory. Disconnect/reconnect and backup restore must leave automatic mode off. Existing feature opt-ins migrate only once. Already-sent provider data cannot be recalled.
+7. Check the Today task title, editable duration and Choose another. Selection alone must not save task changes or move blocks; starting must use the selected task. Long Vietnamese titles, theme contrast, numeric timer alignment and collapsed secondary tools must remain readable. Check About's MD Studio reference links.
+
+## Small usability trial — not yet performed
+
+Ask 3–5 people unfamiliar with the extension to add a title-only task and start focus, choose another task, finish without reflection, recover a delayed plan, and explain which data would leave the device. Repeat one task after a day without coaching. Record time to first focus, wrong turns, unwanted interruptions, confidence about privacy, and whether help was needed. Use observations to decide the next change; do not claim “effortless” from automated tests or a successful developer walkthrough.
 
 ## New daily-flow and privacy acceptance checks
 

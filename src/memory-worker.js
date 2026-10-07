@@ -11,7 +11,7 @@ import {
 
 // One writer owns the separate memory store. Network work never holds this
 // queue; epoch/revision checks reject stale results after user corrections.
-export function createMemoryWorker({ storage, alarms, readState, readCredential, requestUpdate, interactiveBusy = () => false, now = () => new Date() }) {
+export function createMemoryWorker({ storage, alarms, readState, readCredential, requestUpdate, automaticPolicy = async () => null, interactiveBusy = () => false, now = () => new Date() }) {
   let writes = Promise.resolve();
   let activeRun = null;
   const read = async () => normalizeLearnedMemory((await storage.get(LEARNED_MEMORY_KEY))[LEARNED_MEMORY_KEY]);
@@ -41,6 +41,8 @@ export function createMemoryWorker({ storage, alarms, readState, readCredential,
   async function schedule() {
     const store = await get();
     if (!store.settings.learningEnabled) { await alarms.clear(MEMORY_ALARM); return; }
+    const policy = await automaticPolicy();
+    if (policy && !policy.automaticEnabled) { await alarms.clear(MEMORY_ALARM); return; }
     const date = now(), today = localDateKey(date), state = await readState();
     let when = workdayEnd(state, date);
     if (store.usage.automaticDay === today || (store.usage.day === today && store.usage.calls >= MEMORY_LIMITS.dailyCalls) || (!pendingEvidence(store).length && when <= date)) when.setDate(when.getDate() + 1);
@@ -48,6 +50,7 @@ export function createMemoryWorker({ storage, alarms, readState, readCredential,
     if (state.focus?.status === "running" && new Date(state.focus.endsAt) > when) when = new Date(state.focus.endsAt);
     if (store.job) when = new Date(new Date(store.job.startedAt).getTime() + 75_000);
     if (store.retryAfter && new Date(store.retryAfter) > when) when = new Date(store.retryAfter);
+    if (policy && policy.used >= policy.dailyLimit) { when = workdayEnd(state, date); when.setDate(when.getDate() + 1); }
     await alarms.create(MEMORY_ALARM, { when: Math.max(date.getTime() + 60_000, when.getTime()) });
   }
 
@@ -129,6 +132,8 @@ export function createMemoryWorker({ storage, alarms, readState, readCredential,
 
   async function performUpdate(manual) {
     await recover(true);
+    const policy = manual ? null : await automaticPolicy();
+    if (policy && (!policy.automaticEnabled || policy.used >= policy.dailyLimit)) return { outcome: "paused", store: await get() };
     const credential = await readCredential();
     const state = await readState();
     let reservation = null, batch = [];
@@ -143,7 +148,7 @@ export function createMemoryWorker({ storage, alarms, readState, readCredential,
       if (store.retryAfter && new Date(store.retryAfter) > date) { store.status = "paused"; return store; }
       if (store.usage.day !== today) store.usage = { day: today, calls: 0, automaticDay: store.usage.automaticDay };
       if (store.usage.calls >= MEMORY_LIMITS.dailyCalls || (!manual && store.usage.automaticDay === today)) { store.status = "budget"; store.lastError = "The memory update budget is used for today. Existing memories still work."; return store; }
-      reservation = { id: uid("memory-job"), startedAt: date.toISOString(), epoch: store.epoch, memoryRevision: store.memoryRevision, evidenceIds: batch.map(item => item.id), throughSequence: batch.at(-1).sequence };
+      reservation = { id: uid("memory-job"), startedAt: date.toISOString(), epoch: store.epoch, memoryRevision: store.memoryRevision, evidenceIds: batch.map(item => item.id), throughSequence: batch.at(-1).sequence, previousUsage: structuredClone(store.usage), previousAttempt: store.lastAttemptAt };
       store.job = reservation; store.usage.calls += 1; store.usage.automaticDay = today;
       store.lastAttemptAt = date.toISOString(); store.lastError = ""; store.status = "running";
       return store;
@@ -154,7 +159,7 @@ export function createMemoryWorker({ storage, alarms, readState, readCredential,
       const response = await requestUpdate(request, raw => {
         applyMemoryChanges(prepared, raw, batch, now(), [credential.apiKey]);
         return raw;
-      });
+      }, { automatic: !manual });
       let applied = false;
       const result = await mutate(store => {
         if (store.job?.id !== reservation.id) return null;
@@ -174,9 +179,13 @@ export function createMemoryWorker({ storage, alarms, readState, readCredential,
         store.job = null; store.status = "failed";
         store.lastError = redactText(error?.message ?? "Memory update failed.", [credential.apiKey]).slice(0, 300);
         store.retryAfter = new Date(now().getTime() + 15 * 60_000).toISOString();
+        if (error.code === "automatic_ai_paused") {
+          store.usage = reservation.previousUsage; store.lastAttemptAt = reservation.previousAttempt;
+          store.retryAfter = error.retryAt; store.status = "budget";
+        }
         return store;
       });
-      return { outcome: "failed", store: result };
+      return { outcome: error.code === "automatic_ai_paused" ? "paused" : "failed", store: result };
     }
   }
 
@@ -190,7 +199,7 @@ export function createMemoryWorker({ storage, alarms, readState, readCredential,
   }
 
   return {
-    get, initialize, observe, settings, save, note, update, clear, restore, recordContext,
+    get, initialize, observe, settings, save, note, update, clear, restore, recordContext, schedule,
     confirm: id => mutate(store => confirmMemory(store, id, now())),
     forget: id => mutate(store => forgetMemory(store, id, now())),
     undo: id => mutate(store => undoMemoryChange(store, id, now())),

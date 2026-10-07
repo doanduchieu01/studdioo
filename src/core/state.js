@@ -3,6 +3,7 @@ import { normalizeKanban } from "./kanban-state.js";
 import { clamp, deepClone, isPlainObject, safeDate, toIso, uid } from "./utils.js";
 import { MAX_CUSTOM_INSTRUCTIONS_LENGTH, normalizeMemory } from "./memory.js";
 import { exportLearnedMemory } from "./learned-memory.js";
+import { DEFAULT_MODEL } from "./models.js";
 
 export const STATE_KEY = "studioState";
 export const SCHEMA_VERSION = 12;
@@ -31,7 +32,7 @@ export function createDefaultState(now = new Date()) {
       calendarOptIn: false
     },
     preferences: {
-      theme: "night",
+      theme: "paper",
       language: "en",
       autoSort: false,
       autoDailyBudget: false,
@@ -47,7 +48,7 @@ export function createDefaultState(now = new Date()) {
       bufferMinutes: 10,
       allowMultipleFocusBlocks: null,
       planningAssistance: "guided",
-      model: "gemini-3.1-flash-lite"
+      model: DEFAULT_MODEL
     },
     aiUsage: normalizeAiUsage(null, now),
     kanban: normalizeKanban(null),

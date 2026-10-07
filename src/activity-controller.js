@@ -3,7 +3,7 @@ const SESSION_KEY="studioActivityBrowserSession", SIGNALS_KEY="studioActivitySig
 const permission={permissions:["tabs","idle"]};
 const localDay=now=>new Date(now).toLocaleDateString("en-CA");
 
-export function createActivityController(api,{readApp,requestAI,clock=()=>Date.now()}={}) {
+export function createActivityController(api,{readApp,requestAI,automaticAllowed=async()=>true,clock=()=>Date.now()}={}) {
   let writes=Promise.resolve(),aiRun=null;
   const queue=operation=>{const result=writes.then(operation);writes=result.catch(()=>{});return result;};
   const read=async()=>normalizeActivity((await api.storage.local.get(ACTIVITY_KEY))[ACTIVITY_KEY],clock());
@@ -61,6 +61,16 @@ export function createActivityController(api,{readApp,requestAI,clock=()=>Date.n
   async function act(action,options={}){
     const result=await queue(async()=>{
       let current=await read();
+      if(action==="local-extras"){
+        if(options.enabled){
+          if(!await permitted())throw new Error("Allow tab and idle access to enable tracking.");
+          for(const origin of options.origins??[])if(!resourceIdentity(origin)||!await api.permissions.contains({permissions:["scripting"],origins:[`${origin}/*`]}))throw new Error("Allow access to each selected site first.");
+        }
+        current=activityAction(current,"settings",{enabled:options.enabled,details:options.enabled},await readApp(),clock());
+        current.settings.signalOrigins=options.enabled?[...new Set([...current.settings.signalOrigins,...options.origins])].slice(0,30):[];
+        current.settings.backgroundMedia=options.enabled&&current.settings.signalOrigins.length>0;
+        return write(current);
+      }
       if(action==="clear"){
         await api.alarms.clear(ACTIVITY_ALARM);
         const empty=normalizeActivity(null,clock());empty.quota=current.quota;return write(empty);
@@ -83,7 +93,7 @@ export function createActivityController(api,{readApp,requestAI,clock=()=>Date.n
       if(action==="settings"&&options.aiEnabled===true&&!current.settings.details)throw new Error("Enable titles and resource IDs before AI suggestions.");
       return write(activityAction(current,action,options,await readApp(),clock()));
     });
-    if(["settings","site","site-remove","clear","restore"].includes(action))await syncScripts().catch(()=>{});
+    if(["settings","site","site-remove","clear","restore","local-extras"].includes(action))await syncScripts().catch(()=>{});
     return result;
   }
   async function recordSignal(request,sender){
@@ -101,6 +111,7 @@ export function createActivityController(api,{readApp,requestAI,clock=()=>Date.n
     return {allowed:true};
   }
   async function ai(manual=false){
+    if(!manual&&!await automaticAllowed())return read();
     if(aiRun)return aiRun;
     aiRun=(async()=>{
       const claim=await queue(async()=>{
@@ -111,21 +122,30 @@ export function createActivityController(api,{readApp,requestAI,clock=()=>Date.n
         if(!manual&&now-current.quota.lastAt<30*60000)return null;
         const batch=current.sessions.filter(s=>s.closed&&!s.locked&&!s.excluded&&s.assignment.source==="unknown"&&(manual||s.aiFingerprint!==String(s.revision))).slice(-8);
         if(!batch.length)return null;
+        const previousQuota=structuredClone(current.quota),previousFingerprints=Object.fromEntries(batch.map(s=>[s.id,s.aiFingerprint]));
         current.quota.attempts++;current.quota.lastAt=now;
         for(const s of batch)s.aiFingerprint=String(s.revision);
         await write(current);
         const app=await readApp(),request=buildActivityRequest(current,app,batch);
-        return {batch:structuredClone(batch),request,settings:JSON.stringify(current.settings),catalog:JSON.stringify([current.projects,current.tags,current.rules])};
+        return {batch:structuredClone(batch),request,previousQuota,previousFingerprints,claimedQuota:JSON.stringify(current.quota),settings:JSON.stringify(current.settings),catalog:JSON.stringify([current.projects,current.tags,current.rules])};
       });
       if(!claim)return read();
       try{
-        const decisions=await requestAI(claim.request,value=>validateActivityResponse(value,claim.request));
+        const decisions=await requestAI(claim.request,value=>validateActivityResponse(value,claim.request),{automatic:!manual});
         return await queue(async()=>{
           const current=await read(),app=await readApp();if(JSON.stringify(current.settings)!==claim.settings||JSON.stringify([current.projects,current.tags,current.rules])!==claim.catalog)return current;
           if(claim.request.context.tasks.some(t=>!app.tasks.some(x=>x.id===t.id&&x.title===t.title&&!["done","archived"].includes(x.status))))return current;
           const next=applyActivitySuggestions(current,claim.batch,decisions,app,clock());next.lastError="";return write(next);
         });
-      }catch(error){return queue(async()=>{const current=await read();if(current.settings.aiEnabled){current.lastError=String(error.message).slice(0,300);await write(current);}return current;});}
+      }catch(error){return queue(async()=>{
+        const current=await read();
+        if(error.code==="automatic_ai_paused"){
+          if(JSON.stringify(current.quota)===claim.claimedQuota)current.quota=claim.previousQuota;
+          for(const session of current.sessions){const claimed=claim.batch.find(item=>item.id===session.id);if(claimed&&session.revision===claimed.revision&&session.aiFingerprint===String(claimed.revision))session.aiFingerprint=claim.previousFingerprints[session.id];}
+        }
+        if(current.settings.aiEnabled)current.lastError=String(error.message).slice(0,300);
+        return write(current);
+      });}
     })().finally(()=>{aiRun=null;});
     return aiRun;
   }

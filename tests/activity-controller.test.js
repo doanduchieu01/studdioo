@@ -9,6 +9,19 @@ function setup(requestAI=async(request,validate)=>validate({sessions:request.con
   const make=()=>createActivityController(f.api,{readApp:async()=>structuredClone(app),requestAI,clock:()=>f.control.now});
   return {...f,app,make,controller:make()};
 }
+test("manual-only AI policy prevents automatic claims but permits a user request",async()=>{
+  const f=setup();let requests=0;
+  const controller=createActivityController(f.api,{readApp:async()=>f.app,clock:()=>NOW,automaticAllowed:async()=>false,requestAI:async()=>{requests++;return [];}});
+  await controller.ai(false);assert.equal(requests,0);assert.equal((await controller.read()).quota.attempts,0);
+  await controller.ai(true);assert.equal(requests,1);
+});
+test("losing the shared allowance releases unsent activity fingerprints and the local claim",async()=>{
+  const f=setup(async()=>{throw Object.assign(Error("Shared AI paused"),{code:"automatic_ai_paused"});});
+  const original=await f.controller.read();await f.controller.ai(false);const after=await f.controller.read();
+  assert.equal(after.quota.attempts,original.quota.attempts);assert.equal(after.quota.lastAt,original.quota.lastAt);
+  assert.equal(after.sessions[0].aiFingerprint,original.sessions[0].aiFingerprint);
+  assert.equal(after.sessions[0].revision,original.sessions[0].revision);
+});
 test("permissions are required and revocation pauses collection",async()=>{
   const f=setup();f.control.granted=false;
   await assert.rejects(f.controller.act("settings",{enabled:true}),/Allow tab/);

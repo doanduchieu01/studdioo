@@ -1,4 +1,4 @@
-# Stuđiô v0.12.0 privacy notes
+# Stuđiô v0.14.0 privacy notes
 
 There is no Stuđiô server or analytics SDK. App data is in Chrome extension-local storage, without application-level encryption. Optional website tracking estimates foreground browser use, not whole-device screen time or other apps. Neither timer nor website records prove attention or productivity.
 
@@ -6,9 +6,19 @@ There is no Stuđiô server or analytics SDK. App data is in Chrome extension-lo
 
 The privacy screen is available during onboarding and at **Settings → Privacy choices**. It explains purpose, data use and permissions for tracking, titles/resource IDs, per-site signals, background listening, desktop reminders, daily review, Gemini connection, automatic sorting, instruction sharing, saved-memory sharing, background memory learning and debug text. An enabled older website-total collector is shown separately so it can be paused. No switch silently enables its prerequisites.
 
+**Enable all local extras** is an explicit shortcut at the end of the privacy screen. It first opens a warning covering session tracking, title/resource collection, selected-site player signals, estimated background listening, desktop reminders and conflict-review reminders. The user can change the listed sites before the native Chrome prompt. Only those sites are requested, together with the named optional permissions. Existing site selections are retained as disclosed. Cancellation or permission denial does not enable features. Partial storage failures show actual saved choices rather than claiming complete success. This shortcut never enables AI automation, AI feature switches, instruction/memory sharing, remembered credentials or debug text. Turning it off stops these local extras and disables Activity AI as a dependency of title recording; other AI choices and recorded history are retained.
+
+Ten bundled media-site entries are an inactive catalogue. Adding entries in a future update cannot grant access or enable their collection. Removing a site stops its signals; **Revoke access** additionally removes the corresponding Chrome host grant. Neither operation deletes existing records. Player compatibility varies; a preset is not a claim that every embedded, protected or background player is detectable.
+
 Core planning requires `storage`, `sidePanel` and `alarms`. The Gemini host is declared at installation, but the grant alone neither connects Gemini nor sends task data. Optional permissions are requested only when enabling the related feature or adding a named site. Denial, setup cancellation and failed key tests leave the relevant feature off. Media access never requests a wildcard hostname or all-sites grant. Declining all optional features leaves task entry and timers usable.
 
 New installations default instruction and saved-memory sharing off; existing saved choices are preserved, including previously enabled sharing. Daily-review reminders now default off and, if enabled, concern conflicting resource associations rather than mere estimates or missing labels. `profile.privacyReviewVersion` records completion of this local explanation, not blanket consent; the individual feature stores remain authoritative. Disabling does not delete history, provider data or exported files. Media site removal stops signals but Chrome may retain previously granted host access until revoked manually.
+
+## Interactive guides
+
+The separate `studioLearningGuide` local store records version 2, an invitation preference, fixed explanation identifiers marked done/skipped, and paused topic identifiers. It contains no task titles, browsing records, timestamps, free text or account identifiers. Existing guide progress migrates, but ordinary task/timer actions do not create new tour progress. Progress remains until replayed or erased, with a fixed bound determined by the packaged explanations. Overlays open only on a user request and do not require real feature actions to advance.
+
+Guides make no network requests, supply no AI/memory evidence and request no additional permissions. Opening a guide, focusing a control or marking a lesson understood is not consent and does not change any optional-feature switch. **Help & tours** controls automatic tips and individual replays. Guide metadata is excluded from app/Activity backups and debug exports; backup restore leaves device-local guide progress unchanged. **Erase local data** resets guide progress and its tips preference. Exported files and provider data are unaffected.
 
 ## Optional Activity sessions (v0.11.0)
 
@@ -16,7 +26,7 @@ Session tracking is off by default and requires optional **tabs** and **idle** a
 
 **Record titles and exact resource IDs** is separately off by default. When enabled, titles (200 characters) and HTTP(S) origin/path resource keys (700 characters) can be saved. URL fragments and arbitrary query parameters are removed; supported YouTube video IDs are retained. Paths and titles can themselves contain sensitive information. Turning this option off stops new detailed collection and disables Activity AI; existing records, associations and backups are retained until removed/expired/cleared. Page content, typed input, screenshots and visit history are not collected.
 
-Optional **scripting** and per-site HTTP(S) host access allow an isolated top-frame script to read video/audio playback and page-visibility/Picture-in-Picture booleans. Site access is requested one origin at a time. There is no static script on all sites. Scripts are registered only for enabled sites while tracking runs; removing a site or pausing stops collection/unregisters future injection. Current scripts stop on the next denied heartbeat. Signals live in session storage for freshness checking and include tab/resource/time metadata, not page text or keystrokes. Granted Chrome site permissions remain until revoked through Chrome. Private windows/tabs and browser/file pages are excluded.
+Optional **scripting** and per-site HTTP(S) host access allow an isolated top-frame script to read video/audio playback and page-visibility/Picture-in-Picture booleans. Site access is requested for a named origin or the exact selected list in the bulk review; never a wildcard hostname. There is no static script on all sites. Scripts are registered only for enabled sites while tracking runs; removing a site or pausing stops collection/unregisters future injection. Current scripts stop on the next denied heartbeat. Signals live in session storage for freshness checking and include tab/resource/time metadata, not page text or keystrokes. Granted Chrome site permissions remain until explicitly revoked in Privacy or Chrome. Private windows/tabs and browser/file pages are excluded.
 
 Reading and media durations are estimates, never attention/completion evidence. Reading adaptation is a local bounded median of confirmed examples; no model training or provider request is involved. Rules and review edits never complete tasks or change deadlines. Browser time is excluded from budgets, learned-memory evidence, ordinary assistance context and timer history.
 
@@ -52,7 +62,7 @@ In-app aging/weekly-review hints are calculated when the board renders; they are
 
 ## Data sent to Gemini
 
-All AI requests use Google's Interactions API with `store: false`. Assistance requires a named action or an enabled automatic feature. **AI automatic sorting** authorizes classification while the panel is open. **Learn from my activity** separately authorizes background memory requests. Activity AI separately authorizes the limited browser-summary requests below. All three are off by default.
+All AI requests use Google's Interactions API with `store: false`. Assistance requires a named action or both the separately confirmed automatic mode and a selected automatic feature. New AI setups default to **Only when I ask**. A connected key or a local collection switch is not automatic-AI consent. **AI automatic sorting**, **Learn from my activity** and Activity AI remain distinct feature choices; all start off. Existing explicit feature opt-ins initialize the new automatic-mode setting once so upgrades preserve prior choices. Disconnection or backup restoration pauses automatic mode; reconnecting does not restore it. Pausing prevents future automatic requests and discards stale automatic responses, but cannot recall data already sent.
 
 | Operation | Request data |
 | --- | --- |
@@ -95,7 +105,9 @@ Keys live in Chrome session storage unless Remember on this device is selected. 
 
 Free-tier availability/billing depend on the Google project. A free-tier model does not make a paid project free. `store: false` disables Interactions storage, not other data handling. Google's [pricing page](https://ai.google.dev/gemini-api/docs/pricing) states that free-tier content may be used to improve its products. Submit content only if you accept applicable terms.
 
-The memory updater allows at most three requests per local day, including failures, and at most one automatic batch. Activity attribution has its own separate three-attempt daily cap. Other Gemini actions and automatic sorting have no app-enforced daily cap. Sorting reserves each task revision before sending and requires an edit or explicit retry after uncertainty/failure. The counter does not know remaining project quota. There is no automatic model switching.
+Automatic sorting, Activity attribution and memory updates share one device-local allowance, default 3 attempts per day, adjustable 0–100. A serialized reservation occurs before dispatch; failed attempts count. Zero pauses automatic requests. Manual actions and connection tests do not consume this allowance. Activity retains its three-attempt daily cap, and memory retains three attempts per day and at most one automatic batch. Sorting reserves task revisions; a denied shared reservation leaves the unsent work retryable. Manual Gemini actions other than these feature caps have no app-enforced daily cap. The counter does not know Google's remaining project quota and does not guarantee zero charges. There is no automatic model switching; new connections default to Gemini 3.5 Flash-Lite while saved model choices remain.
+
+`studioAIPolicy` version 1 stores automatic mode, the daily limit, device-local day, total/per-feature attempt counts and a revision used to discard stale responses. It stores no prompt, title, browsing content or credential. Counts reset when the next local day is observed. It is separate from app/Activity backups; restoration and app-data reset turn automatic mode off and retain the allowance/counters so they cannot silently reset a day's spending guard. Reinstalling or deleting extension storage is a separate operation. This local metadata is not telemetry.
 
 ## Diagnostics and backups
 

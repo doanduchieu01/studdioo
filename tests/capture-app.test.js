@@ -70,7 +70,7 @@ async function boot(options = {}) {
   const area = (map, notify = false) => ({
     async get(keys) { return structuredClone(Object.fromEntries((Array.isArray(keys) ? keys : [keys]).filter(key => map.has(key)).map(key => [key, map.get(key)]))); },
     async set(values) {
-      if (notify && writeFailure) throw new Error("Storage temporarily unavailable.");
+      if (notify && (writeFailure === true || typeof writeFailure === "string" && Object.hasOwn(values,writeFailure))) throw new Error("Storage temporarily unavailable.");
       for (const [key, value] of Object.entries(values)) {
         const oldValue = map.get(key);
         map.set(key, structuredClone(value));
@@ -103,6 +103,7 @@ async function boot(options = {}) {
         if (options.privacy) { if (privacyDecision) for (const x of [...(value.permissions ?? []), ...(value.origins ?? [])]) grants.add(x); return Promise.resolve(privacyDecision); }
         assert.deepEqual(value, TRACKING_PERMISSIONS); trackingRequests++; trackingPermission = options.grantTracking !== false; return Promise.resolve(trackingPermission);
       },
+      async remove(value) { for (const origin of value.origins ?? []) grants.delete(origin); return true; },
       onAdded: event, onRemoved: event
     };
     chrome.idle = { async queryState() { return "active"; }, setDetectionInterval() {}, onStateChanged: event };
@@ -193,6 +194,105 @@ async function boot(options = {}) {
     cleanup() { URL.createObjectURL = originalCreateUrl; URL.revokeObjectURL = originalRevokeUrl; for (const [key, value] of Object.entries(originals)) { if (value === undefined) delete globalThis[key]; else globalThis[key] = value; } }
   };
 }
+
+test("bulk local onboarding reviews exact sites before requesting permission and leaves AI separate",async()=>{
+  const app=await boot({privacy:true,onboarding:true,connected:false});
+  try{
+    await app.click("onboarding-defaults");
+    assert.equal(app.permissionCalls.length,0);
+    await app.change("","",{dataset:{privacy:"localAll"},checked:true});
+    assert.match(app.app.innerHTML,/local-review-title/);assert.equal(app.permissionCalls.length,0);
+    assert.equal(app.stored("studioActivity")?.settings.enabled ?? false,false);
+    await app.click("close-modal");assert.equal(app.permissionCalls.length,0);
+    await app.change("","",{dataset:{privacy:"localAll"},checked:true});
+    const {MEDIA_PRESETS}=await import("../src/core/media-sites.js");
+    for(const site of MEDIA_PRESETS.slice(1))await app.change("","",{dataset:{bulkSite:site.origin},checked:false});
+    const before=app.renderWrites();await app.click("confirm-local-extras");
+    assert.equal(app.permissionRenderWrites(),before,"The permission request retains the original user gesture");
+    assert.deepEqual(app.permissionCalls[0],{permissions:["tabs","idle","notifications","scripting"],origins:["https://www.youtube.com/*"]});
+    const activity=app.stored("studioActivity");
+    assert.equal(activity.settings.enabled,true);assert.equal(activity.settings.details,true);assert.equal(activity.settings.backgroundMedia,true);
+    assert.deepEqual(activity.settings.signalOrigins,["https://www.youtube.com"]);
+    assert.equal(activity.settings.aiEnabled,false);assert.equal(app.stored("studioAIPolicy").automaticEnabled,false);
+    assert.equal(app.state().preferences.autoSort,false);assert.equal(app.state().memory.enabled,false);
+    assert.equal(app.calls.length,0);assert.doesNotMatch(app.app.innerHTML,/local-review-title/);
+    await app.change("","",{dataset:{privacy:"localAll"},checked:false});
+    const paused=app.stored("studioActivity");assert.equal(paused.settings.enabled,false);assert.deepEqual(paused.sessions.map(s=>s.id),activity.sessions.map(s=>s.id));assert.deepEqual(paused.sessions[0]?.segments,activity.sessions[0]?.segments);
+    assert.equal(app.stored("studioReminders").settings.enabled,false);
+  }finally{app.cleanup();}
+});
+
+test("denied bulk permission preserves mixed choices and makes no cloud request",async()=>{
+  const app=await boot({privacy:true,grantPrivacy:false,connected:false});
+  try{
+    await app.click("open-privacy");await app.change("","",{dataset:{privacy:"details"},checked:true});
+    const before=app.stored("studioActivity");
+    await app.change("","",{dataset:{privacy:"localAll"},checked:true});await app.click("confirm-local-extras");
+    assert.deepEqual(app.stored("studioActivity"),before);
+    assert.match(app.app.innerHTML,/Custom · 1\/6 enabled/);
+    assert.match(app.toast.innerHTML,/Permission was not granted/);
+    assert.equal(app.calls.length,0);
+  }finally{app.cleanup();}
+});
+
+test("a partial bulk write shows saved local settings and never claims complete success",async()=>{
+  const app=await boot({privacy:true,connected:false});
+  try{
+    await app.click("open-privacy");await app.change("","",{dataset:{privacy:"localAll"},checked:true});
+    app.rejectWrites("studioReminders");await app.click("confirm-local-extras");
+    assert.equal(app.stored("studioActivity").settings.enabled,true);
+    assert.equal(app.stored("studioReminders")?.settings.enabled ?? false,false);
+    assert.match(app.app.innerHTML,/Custom · 4\/6 enabled/);assert.match(app.toast.innerHTML,/Storage temporarily unavailable/);
+    assert.equal(app.calls.length,0);
+  }finally{app.cleanup();}
+});
+
+test("media catalogue starts inactive; one preset grants only its site and can revoke it",async()=>{
+  const app=await boot({privacy:true,connected:false});
+  try{
+    await app.click("open-privacy");assert.match(app.app.innerHTML,/Common media sites/);
+    assert.equal(app.permissionCalls.length,0);assert.equal(app.registeredScripts.length,0);
+    await app.click("privacy-add-preset",{origin:"https://open.spotify.com"});
+    assert.deepEqual(app.permissionCalls[0],{permissions:["scripting"],origins:["https://open.spotify.com/*"]});
+    assert.deepEqual(app.stored("studioActivity").settings.signalOrigins,["https://open.spotify.com"]);
+    assert.equal(app.stored("studioActivity").settings.enabled,false);
+    await app.click("privacy-revoke-site",{origin:"https://open.spotify.com"});
+    assert.deepEqual(app.stored("studioActivity").settings.signalOrigins,[]);
+    assert.equal(await chrome.permissions.contains({origins:["https://open.spotify.com/*"]}),false);
+    assert.equal(app.calls.length,0);
+  }finally{app.cleanup();}
+});
+
+test("automatic AI needs its own confirmation; zero allowance still permits manual capture",async()=>{
+  const app=await boot({privacy:true});
+  try{
+    await app.click("go-settings");assert.equal(app.stored("studioAIPolicy").automaticEnabled,false);
+    await app.change("ai-mode","automatic");assert.match(app.app.innerHTML,/ai-review-title/);
+    assert.equal(app.stored("studioAIPolicy").automaticEnabled,false);
+    await app.click("close-modal");assert.equal(app.stored("studioAIPolicy").automaticEnabled,false);
+    await app.change("ai-mode","automatic");await app.click("confirm-automatic-ai");
+    assert.equal(app.stored("studioAIPolicy").automaticEnabled,true);
+    assert.equal(app.state().preferences.autoSort,false);assert.equal(app.memory().settings.learningEnabled,false);
+    assert.equal(app.stored("studioActivity")?.settings.aiEnabled ?? false,false);
+    await app.submit("ai-budget-form",{dailyLimit:"0"});assert.equal(app.stored("studioAIPolicy").dailyLimit,0);
+    await app.submit("omnibar-form",{capture:"Study tomorrow"});assert.equal(app.calls.length,1);
+    assert.equal(app.stored("studioAIPolicy").used,0);
+    await app.click("close-modal");await app.change("ai-mode","manual");assert.equal(app.stored("studioAIPolicy").automaticEnabled,false);
+  }finally{app.cleanup();}
+});
+
+test("new AI connections default to 3.5 Flash-Lite and reconnecting does not restore automatic consent",async()=>{
+  const app=await boot({privacy:true,connected:false});
+  try{
+    const blocked=await app.send({type:"ai-policy:settings",patch:{automaticEnabled:true}});assert.equal(blocked.ok,false);
+    const connected=await app.send({type:"gemini:connect",apiKey:"fake-test-connection-12345",remember:false});assert.equal(connected.ok,true);
+    assert.equal(app.calls[0].body.model,"gemini-3.5-flash-lite");assert.equal(app.stored("studioAIPolicy").automaticEnabled,false);
+    await app.send({type:"ai-policy:settings",patch:{automaticEnabled:true}});
+    await app.send({type:"gemini:disconnect"});assert.equal(app.stored("studioAIPolicy").automaticEnabled,false);
+    await app.send({type:"gemini:connect",apiKey:"fake-test-connection-12345",remember:false});
+    assert.equal(app.stored("studioAIPolicy").automaticEnabled,false);
+  }finally{app.cleanup();}
+});
 
 test("review modal disclosure clicks retain native expand/collapse behavior", async () => {
   const app = await boot();

@@ -1,4 +1,8 @@
 import { sortingCandidates, ruleClassification, applySortResults } from "./core/task-sorting.js";
+import { DEFAULT_MODEL } from "./core/models.js";
+import { AI_POLICY_KEY, normalizeAIPolicy, createAIPolicyController } from "./core/ai-policy.js";
+import { localExtrasPermission } from "./core/media-sites.js";
+import { LEARNING_KEY, initialLearningGuide, learningAction } from "./core/learning-guide.js";
 import { createDemoState, normalizeState, STATE_KEY } from "./core/state.js";
 import { createDiagnosticReport, DIAGNOSTICS_SETTINGS_KEY, normalizeDiagnosticSettings } from "./core/diagnostics.js";
 import { LEARNED_MEMORY_KEY, normalizeLearnedMemory } from "./core/learned-memory.js";
@@ -11,6 +15,22 @@ import { RECOVERY_KEY, delayedBlocks, proposeRecovery, applyRecovery, undoRecove
 
 export const isExtension = Boolean(globalThis.chrome?.runtime?.id && globalThis.chrome?.storage?.local);
 const previewKey = "studioPreviewState";
+
+export async function getLearningGuide() {
+  if (isExtension) return message({ type: "guide:get" });
+  const raw = localStorage.getItem(LEARNING_KEY);
+  let saved; try { saved = JSON.parse(raw); } catch { saved = {}; }
+  const guide = initialLearningGuide(saved, await loadState());
+  if (raw === null) localStorage.setItem(LEARNING_KEY, JSON.stringify(guide));
+  return guide;
+}
+
+export async function learningGuideAction(action, options = {}) {
+  if (isExtension) return message({ type: "guide:action", action, options });
+  const guide = learningAction(await getLearningGuide(), action, options);
+  localStorage.setItem(LEARNING_KEY, JSON.stringify(guide));
+  return guide;
+}
 
 export async function loadState() {
   if (isExtension) {
@@ -65,7 +85,7 @@ async function message(payload) {
 }
 
 export async function getGeminiStatus() {
-  if (!isExtension) return { connected: false, remembered: false, model: "gemini-3.1-flash-lite", preview: true };
+  if (!isExtension) return { connected: false, remembered: false, model: DEFAULT_MODEL, preview: true };
   return message({ type: "gemini:status" });
 }
 
@@ -88,6 +108,30 @@ export async function disconnectGemini() {
   return message({ type: "gemini:disconnect" });
 }
 
+export function getAIPolicy() {
+  return isExtension ? message({ type: "ai-policy:get" }) : Promise.resolve(normalizeAIPolicy(previewStore(AI_POLICY_KEY)));
+}
+export function observeAIPolicy(callback) {
+  if (!isExtension) return () => {};
+  const listener = changes => { if (changes[AI_POLICY_KEY]?.newValue) callback(normalizeAIPolicy(changes[AI_POLICY_KEY].newValue)); };
+  chrome.storage.onChanged.addListener(listener);
+  return () => chrome.storage.onChanged.removeListener(listener);
+}
+export async function setAIPolicy(patch) {
+  if (isExtension) return message({ type: "ai-policy:settings", patch });
+  const storage = { async get(key) { return { [key]: previewStore(key) }; }, async set(values) { for (const [key, value] of Object.entries(values)) localStorage.setItem(key, JSON.stringify(value)); } };
+  return createAIPolicyController(storage).settings(patch);
+}
+export function requestLocalExtrasPermission(origins) {
+  const request = localExtrasPermission(origins);
+  return isExtension && chrome.permissions?.request ? chrome.permissions.request(request) : Promise.resolve(false);
+}
+export function applyLocalExtras(enabled, origins = []) { return message({ type: "privacy:local", enabled, origins }); }
+export function revokeMediaAccess(origin) {
+  if (!isExtension || !chrome.permissions?.remove) return Promise.resolve(false);
+  return chrome.permissions.remove({ origins: [`${resourceIdentity(origin).origin}/*`] });
+}
+
 export async function changeGeminiModel(model) { return message({ type: "gemini:model", model }); }
 
 export async function getLearnedMemory() {
@@ -100,6 +144,7 @@ export async function learnedMemoryAction(action, payload = {}) {
 
 export async function replaceAppData(state, memory, reset = false) {
   if (!isExtension) {
+    if (reset) { localStorage.removeItem(LEARNING_KEY); await setAIPolicy({ automaticEnabled: false }); }
     if(reset)localStorage.removeItem(ACTIVITY_KEY);
     else {const a=await getActivity();a.settings.enabled=false;a.settings.aiEnabled=false;a.cursor=null;localStorage.setItem(ACTIVITY_KEY,JSON.stringify(a));}
     localStorage.removeItem(REMINDER_KEY);localStorage.removeItem(RECOVERY_KEY);
@@ -207,8 +252,8 @@ export function resetPreview() {
   if (!isExtension) localStorage.removeItem(previewKey);
 }
 
-export async function sortUnsortedTasks() {
-  if (isExtension) return message({ type: "sorting:run" });
+export async function sortUnsortedTasks(manual = false) {
+  if (isExtension) return message({ type: "sorting:run", manual });
   const state = await loadState();
   const tasks = sortingCandidates(state);
   const results = tasks.map(task => ({ task, rule: ruleClassification(task) })).filter(item => item.rule).map(({ task, rule }) => ({ id: task.id, ...rule }));

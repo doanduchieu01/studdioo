@@ -61,3 +61,26 @@ export interface RecoveryHistory {
   id: Id; at: IsoInstant; before: ScheduledBlock[]; added: ScheduledBlock[];
   afterFingerprint: string;
 }
+
+/** Device-local app policy; a future backend must make reservations transactional. */
+export interface AIPolicy {
+  version: 1;
+  automaticEnabled: boolean;
+  dailyLimit: number; // integer 0..100
+  day: string; // device-local YYYY-MM-DD; supply the user's timezone on a server
+  used: number;
+  byFeature: Record<"sorting" | "activity" | "memory", number>;
+  epoch: number; // invalidates automatic responses when mode changes
+}
+export interface LearningGuide {
+  version: 2;
+  enabled: boolean; // invitation preference, never feature consent
+  steps: Record<string, "done" | "skipped">; // packaged identifiers only
+  pausedTopics: string[];
+}
+export interface MediaPreset {
+  name: string;
+  origin: string;
+  kind: string;
+  // A catalogue entry carries no enabled state or permission grant.
+}

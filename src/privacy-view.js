@@ -1,8 +1,10 @@
 import { html, t } from "./i18n.js";
 import { escapeHtml as e } from "./core/utils.js";
+import { renderMediaPresets, renderLocalExtrasToggle, renderAIPolicy } from "./features-view.js";
+import { guideText as c } from "./learning-view.js";
 
 // The checked value always reflects saved state, never a pending permission request.
-export function renderPrivacy({ state, activity, reminders, privacyReady, gemini, learned, diagnostics, legacy, advancedOpen, working, mediaSetup, geminiForm }) {
+export function renderPrivacy({ state, activity, reminders, privacyReady, gemini, learned, diagnostics, legacy, advancedOpen, working, mediaSetup, geminiForm, aiPolicy }) {
   working ||= !privacyReady;
   const s = activity.settings;
   const row = (key, title, purpose, permissions, checked, disabled = false) => html`<div class="privacy-choice"><label class="check-row"><input type="checkbox" data-privacy="${key}" aria-describedby="privacy-${key}-help" ${checked ? "checked" : ""} ${working || disabled ? "disabled" : ""}><strong>${t(title)}</strong></label><div id="privacy-${key}-help"><p>${t(purpose)}</p><p class="field-help">${t(permissions)}</p></div></div>`;
@@ -11,6 +13,7 @@ export function renderPrivacy({ state, activity, reminders, privacyReady, gemini
     <p class="privacy-note">New installations start with optional data sharing and collection off. Existing choices are kept. Turning a feature off stops future use; it does not erase saved history or data already sent to Google.</p>
     ${!state.profile.onboardingComplete ? html`<button class="btn" type="button" data-action="finish-onboarding" ${working ? "disabled" : ""}>Continue with these choices</button>` : ""}
     ${!privacyReady ? html`<p role="alert">Some privacy settings could not be read. Controls are unavailable; reopen this screen to retry. Shown values may be out of date.</p>` : ""}
+    <p class="privacy-group-title">${c("On this device · optional collection", "Trên thiết bị · thu thập tùy chọn")}</p>
     <section class="card"><h2>Browser activity</h2>
       ${legacy?.enabled ? row("legacy", "Older website-total tracking is on", "This earlier collector stores hostnames and daily totals locally for 7 days. Turn it off here or switch to session tracking below; the two collectors do not run together.", "Chrome permissions: tabs and idle, already granted. Turning this off keeps existing totals.", true) : ""}
       ${row("tracking", "Record browser sessions", "Estimate time on the foreground website, including quiet reading. Hostnames and times stay on this device for 7 days. No page content or keystrokes are recorded; attention is not verified.", "Chrome permissions: tabs (website address) and idle (input inactivity). Enabling this pauses the older website-total tracker.", s.enabled)}
@@ -18,14 +21,18 @@ export function renderPrivacy({ state, activity, reminders, privacyReady, gemini
       ${row("media", "Read media playback signals", "Use player state to improve lecture estimates on sites you choose. No audio or video is recorded. Choose a site below; this stays off until access is granted.", "Chrome permissions: scripting and access to each chosen site, requested separately. No all-sites grant is requested. Removing a site stops its signals; Chrome may retain the grant until revoked in extension settings.", s.signalOrigins.length > 0)}
       ${mediaSetup || s.signalOrigins.length ? html`<form id="privacy-site-form"><div class="field"><label for="privacy-origin">Website URL</label><input class="input" id="privacy-origin" name="origin" type="url" placeholder="https://www.youtube.com" required></div><button class="btn" type="submit" ${working ? "disabled" : ""}>Allow this site</button><p class="field-help">Reload the page after granting access. Tracking must also be on.</p></form>${s.signalOrigins.map(origin => html`<div class="activity-rule"><span>${e(origin)}</span><button class="btn compact" type="button" data-action="privacy-remove-site" data-origin="${e(origin)}" ${working ? "disabled" : ""}>Remove</button></div>`).join("")}` : ""}
       ${row("backgroundMedia", "Include background listening estimates", "Count playback from an allowed site when its window is in the background. Playback still does not prove attention.", "Requires session tracking and at least one allowed media site. No additional Chrome permission.", s.backgroundMedia, !s.backgroundMedia && !s.signalOrigins.length)}
+      ${renderMediaPresets(s.signalOrigins, working)}
+      ${s.signalOrigins.length ? `<details class="mini-disclosure"><summary>${c("Remove Chrome site access", "Gỡ quyền trang trong Chrome")}</summary><p class="field-help">${c("Removing a preset stops its signals. These controls also revoke Chrome's grant. Neither action deletes recorded history.", "Gỡ trang dừng tín hiệu. Nút bên dưới cũng thu hồi quyền Chrome. Cả hai không xóa lịch sử đã ghi.")}</p>${s.signalOrigins.map(origin => `<div class="activity-rule"><span>${e(origin)}</span><button class="btn compact" type="button" data-action="privacy-revoke-site" data-origin="${e(origin)}" ${working ? "disabled" : ""}>${c("Revoke access", "Thu hồi quyền")}</button></div>`).join("")}</details>` : ""}
     </section>
     <section class="card"><h2>Reminders</h2>
       ${row("notifications", "Enable desktop reminders", "Remind you about planned blocks, deadlines and timer endings. Task titles may be visible on shared screens. Quiet hours and reminder types can be changed in Settings.", "Chrome permission: notifications. The browser must be running; device sleep can delay reminders.", reminders.settings.enabled)}
       ${row("review", "Optional daily activity review", "At 18:00, offer a review only when saved associations conflict. Unlabeled or estimated time alone never triggers this reminder.", "Uses the same notifications permission. Requires desktop reminders to be on.", reminders.settings.review)}
     </section>
+    <p class="privacy-group-title">${c("AI assistance · separate sharing choices", "Hỗ trợ AI · lựa chọn chia sẻ riêng")}</p>
     <section class="card"><h2>Optional cloud assistance</h2>
       ${row("gemini", "Connect Gemini assistance", "Send the context named by an AI action to Google, such as your capture text, selected task details or timer totals. Connecting requires your API key and an explicit connection test. No account or key is needed for local tasks and timers.", "Chrome host access: generativelanguage.googleapis.com is declared at installation, not a new permission prompt. Requests require a connected key. Remembering the key on this device is a separate choice in setup, off on new installations.", gemini.connected)}
       ${geminiForm}
+      ${renderAIPolicy(aiPolicy, gemini.connected, working)}
       <details class="privacy-advanced" id="privacy-ai-options" ${advancedOpen ? "open" : ""}><summary>Separate AI and troubleshooting choices</summary>
         ${row("activityAI", "AI suggestions for unclear sessions", "Let Gemini suggest task, project and tag assignments. Shares session titles, hostnames, minutes, candidate task titles and label names, including automatic batches while tracking. No full URLs or page content. Suggestions never confirm time or complete tasks.", "Requires titles/resource IDs and a connected Gemini key. Uses the same Gemini host access; no additional Chrome permission. Up to 3 attempts per day.", s.aiEnabled, !s.aiEnabled && (!s.details || !gemini.connected))}
         ${row("autoSort", "Automatic task sorting", "Use local rules first, then Gemini for unclear task importance when connected. May send task titles, notes, deadlines and enabled personalization. Sorting can change task categories; it does not move scheduled blocks.", "Uses the existing Gemini host access when connected. No additional Chrome permission. Rules still work locally without Gemini.", state.preferences.autoSort)}
@@ -36,5 +43,6 @@ export function renderPrivacy({ state, activity, reminders, privacyReady, gemini
       </details>
     </section>
     <details class="card"><summary>Permissions for the local planner</summary><p>storage keeps tasks and settings on this device; sidePanel opens Stuđiô beside your tabs; alarms wakes timers and opted-in reminders. These base permissions are declared at installation. The Gemini host grant alone does not connect AI. Optional tracking permissions can also be revoked in Chrome’s extension settings.</p><p>Disabling a switch is not a deletion request. Use the separate backup and clear-data controls to manage saved history. Never share a backup or debug report without checking its contents.</p></details>
+    ${renderLocalExtrasToggle(activity, reminders, working)}
   </section>`;
 }

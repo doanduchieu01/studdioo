@@ -7,7 +7,7 @@ import { addTask, createDefaultState, STATE_KEY } from "../src/core/state.js";
 process.env.TZ = "UTC";
 
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; }
-function harness() {
+function harness(policy = null) {
   let date = new Date("2026-09-10T10:00:00Z"), key = "fake-worker-credential", failing = false, active = false, response = { changes: [] };
   const values = new Map([[STATE_KEY, createDefaultState(date)]]), alarm = new Map(), calls = [], writes = [];
   const storage = {
@@ -19,6 +19,7 @@ function harness() {
     alarms: { async create(name, value) { alarm.set(name, value); }, async clear(name) { alarm.delete(name); } },
     readState: async () => structuredClone(values.get(STATE_KEY)),
     readCredential: async () => ({ apiKey: key }),
+    automaticPolicy: async () => policy,
     interactiveBusy: () => active, now: () => new Date(date),
     requestUpdate: async (request, validate) => { calls.push(request); return validate(await (typeof response === "function" ? response(request) : response)); }
   });
@@ -39,6 +40,23 @@ test("learning opt-in queues new notes but does not make an immediate API call",
   assert.ok(h.alarm.has(MEMORY_ALARM));
   await worker.settings({ learningEnabled: false });
   assert.equal(pendingEvidence(await worker.get()).length, 0); assert.equal(h.alarm.size, 0);
+});
+
+test("shared manual-only mode holds automatic memory work but still allows an explicit update",async()=>{
+  const h=harness({automaticEnabled:false,dailyLimit:3,used:0}),worker=h.make();
+  await enable(h,worker);assert.equal(h.alarm.size,0);
+  h.setDate("2026-09-10T23:00:00Z");
+  assert.equal((await worker.update(false)).outcome,"paused");assert.equal(h.calls.length,0);
+  await worker.update(true);assert.equal(h.calls.length,1);
+});
+
+test("a lost shared-budget reservation keeps memory evidence and refunds only the unsent local claim",async()=>{
+  const h=harness({automaticEnabled:true,dailyLimit:3,used:0}),worker=h.make();
+  await enable(h,worker);h.setDate("2026-09-10T23:00:00Z");
+  h.respond(()=>{throw Object.assign(Error("Daily shared budget reached"),{code:"automatic_ai_paused",retryAt:"2026-09-11T00:00:00Z"});});
+  const result=await worker.update(false);
+  assert.equal(result.outcome,"paused");assert.equal(result.store.usage.calls,0);assert.equal(result.store.job,null);
+  assert.equal(pendingEvidence(result.store).length,1);
 });
 
 test("an automatic update waits for workday end and pauses during interactive work or a timer", async () => {

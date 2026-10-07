@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { addTask, createDefaultState, STATE_KEY } from "../src/core/state.js";
 import { moveToQuadrant } from "../src/core/time-management.js";
+import { AI_POLICY_KEY } from "../src/core/ai-policy.js";
 
 async function boot() {
   let initial = createDefaultState(); initial.preferences.autoSort = true; initial.preferences.language = "vi";
@@ -83,4 +84,35 @@ test("interactive AI calls increment the daily counter and stale form saves cann
     await app.send({ type: "app:save", state: before });
     assert.equal(app.state().aiUsage.days[0].count, 1);
   } finally { app.close(); }
+});
+
+test("automatic sorting honors the shared allowance and manual sorting stays separate",async()=>{
+  const app=await boot();
+  try{
+    await app.send({type:"ai-policy:settings",patch:{dailyLimit:0}});
+    await app.send({type:"sorting:run"});assert.equal(app.calls.length,0);
+    assert.equal(app.state().tasks[0].sortFingerprint,"");
+    await app.send({type:"sorting:run",manual:true});assert.equal(app.calls.length,1);
+    assert.equal(app.local.get(AI_POLICY_KEY).used,0);assert.equal(app.state().tasks[0].important,true);
+  }finally{app.close();}
+});
+test("failed automatic sorting consumes one shared attempt and preserves the daily count",async()=>{
+  const app=await boot();
+  try{
+    app.corrupt();await app.send({type:"sorting:run"});
+    assert.equal(app.local.get(AI_POLICY_KEY).used,1);assert.equal(app.local.get(AI_POLICY_KEY).byFeature.sorting,1);
+    await app.send({type:"ai-policy:settings",patch:{automaticEnabled:false}});
+    await app.send({type:"ai-policy:settings",patch:{automaticEnabled:true}});
+    assert.equal(app.local.get(AI_POLICY_KEY).used,1);
+  }finally{app.close();}
+});
+test("pausing automatic AI discards an already-running response without changing the task",async()=>{
+  const app=await boot();
+  try{
+    const hold=app.hold(),pending=app.send({type:"sorting:run"});await hold.started;
+    await app.send({type:"ai-policy:settings",patch:{automaticEnabled:false}});
+    hold.release();const result=await pending;
+    assert.match(result.data.error,/response was not applied/);assert.equal(app.state().tasks[0].important,null);
+    assert.equal(app.local.get(AI_POLICY_KEY).used,1);
+  }finally{app.close();}
 });
