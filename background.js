@@ -326,10 +326,36 @@ chrome.runtime.onMessageExternal?.addListener((request, sender, sendResponse) =>
   return true;
 });
 
+// Tab Stuđiô hợp lệ để nhận Auth Token: cùng quy tắc với content.js isStudioWebApp
+function isStudioTabUrl(url) {
+  try {
+    const u = new URL(String(url ?? ""));
+    if (u.hostname.includes("exe-studio")) return true;
+    if (
+      (u.hostname === "localhost" || u.hostname === "127.0.0.1") &&
+      (u.port === "5173" || u.port === "8000")
+    ) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 // ---- XỬ LÝ NỘI BỘ TRONG EXTENSION (onMessage cho SidePanel & Content Script) ----
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   (async () => {
     const type = request?.type;
+
+    // Chặn token từ tab lạ: chỉ tab Stuđiô mới được đồng bộ auth
+    if (type === "companion:auto-sync-auth") {
+      if (sender?.id !== chrome.runtime.id || !isStudioTabUrl(sender?.tab?.url)) {
+        throw new Error("companion:auto-sync-auth chỉ chấp nhận từ tab Stuđiô (exe-studio / localhost:5173,8000).");
+      }
+    } else if (sender?.id !== chrome.runtime.id) {
+      throw new Error("Yêu cầu nội bộ chỉ chấp nhận từ Stuđiô Extension.");
+    }
 
     if (type === "companion:get-data") {
       const auth = (await chrome.storage.local.get(AUTH_KEY))?.[AUTH_KEY] || null;
