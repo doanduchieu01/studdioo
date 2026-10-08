@@ -8,6 +8,12 @@
  * - Tích gạch hoàn thành (Strike-through checklist)
  */
 
+import { createApiClient } from "./lib/api.js";
+
+// Single HTTP transport: Bearer token + 401 -> refresh -> retry.
+// Payloads/URLs unchanged; the token is re-read from the store per request.
+const api = createApiClient({ storage: chrome.storage, fetchImpl: (...args) => fetch(...args) });
+
 let currentAuth = null;
 let timerMinutes = 25;
 let timerSecondsLeft = 25 * 60;
@@ -363,17 +369,9 @@ async function handleLogout() {
 
 async function loadAllTasks() {
   if (!currentAuth?.accessToken) return;
-  const apiBase = currentAuth.apiBase || "https://exe-studio.onrender.com";
 
   try {
-    const resp = await fetch(`${apiBase}/api/v1/tasks/`, {
-      headers: {
-        Authorization: `Bearer ${currentAuth.accessToken}`,
-      },
-    });
-
-    if (!resp.ok) return;
-    const tasks = await resp.json();
+    const tasks = await api.get("/tasks/");
     allTasks = Array.isArray(tasks) ? tasks : [];
 
     // Tự động ghim việc đầu tiên nếu chưa ghim
@@ -605,7 +603,6 @@ function pinTaskToHero(task) {
 
 async function toggleSubtask(taskId, subtaskId) {
   if (!currentAuth?.accessToken) return;
-  const apiBase = currentAuth.apiBase || "https://exe-studio.onrender.com";
 
   const parentTask = allTasks.find((t) => t.id === taskId);
   if (parentTask && Array.isArray(parentTask.subtasks)) {
@@ -626,19 +623,10 @@ async function toggleSubtask(taskId, subtaskId) {
   }
 
   try {
-    const res = await fetch(`${apiBase}/api/v1/tasks/subtasks/${subtaskId}/toggle`, {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${currentAuth.accessToken}`,
-      },
-    });
-
-    if (res.ok) {
-      const updatedSub = await res.json();
-      if (parentTask && Array.isArray(parentTask.subtasks)) {
-        const sub = parentTask.subtasks.find((s) => s.id === subtaskId);
-        if (sub) sub.is_completed = updatedSub.is_completed;
-      }
+    const updatedSub = await api.patch(`/tasks/subtasks/${subtaskId}/toggle`, undefined);
+    if (parentTask && Array.isArray(parentTask.subtasks)) {
+      const sub = parentTask.subtasks.find((s) => s.id === subtaskId);
+      if (sub) sub.is_completed = updatedSub.is_completed;
     }
   } catch (err) {
     console.error("Lỗi toggle subtask:", err);
@@ -667,34 +655,22 @@ async function handleQuickAdd(title) {
   renderTaskList();
 
   try {
-    const res = await fetch(`${apiBase}/api/v1/tasks/`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${currentAuth.accessToken}`,
-      },
-      body: JSON.stringify({
-        title,
-        priority: "high",
-        status: "pending",
-        duration_minutes: 30,
-        source: "extension",
-        description: "Ghi nhanh từ Stuđiô TaskPad",
-      }),
+    const created = await api.post("/tasks/", {
+      title,
+      priority: "high",
+      status: "pending",
+      duration_minutes: 30,
+      source: "extension",
+      description: "Ghi nhanh từ Stuđiô TaskPad",
     });
-
-    if (res.ok) {
-      const created = await res.json();
-      tempTask.id = created.id;
-      if (!currentFocusTask) {
-        pinTaskToHero(created);
-      }
-      renderTaskList();
-    } else {
-      await loadAllTasks();
+    tempTask.id = created.id;
+    if (!currentFocusTask) {
+      pinTaskToHero(created);
     }
+    renderTaskList();
   } catch (err) {
     console.error("Lỗi tạo task:", err);
+    await loadAllTasks();
   }
 }
 
@@ -711,31 +687,22 @@ async function handleSaveCurrentTab() {
   const title = `Nghiên cứu: ${(activeWebTab.title || "Tài liệu học").slice(0, 80)}`;
 
   try {
-    const res = await fetch(`${apiBase}/api/v1/tasks/`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${currentAuth.accessToken}`,
-      },
-      body: JSON.stringify({
-        title,
-        description: `Nguồn thu thập: ${activeWebTab.url}`,
-        source_url: activeWebTab.url,
-        source_title: (activeWebTab.title || "").slice(0, 500),
-        priority: "medium",
-        duration_minutes: 30,
-        source: "capture",
-      }),
+    await api.post("/tasks/", {
+      title,
+      description: `Nguồn thu thập: ${activeWebTab.url}`,
+      source_url: activeWebTab.url,
+      source_title: (activeWebTab.title || "").slice(0, 500),
+      priority: "medium",
+      duration_minutes: 30,
+      source: "capture",
     });
 
-    if (res.ok) {
-      btn.textContent = "✓ Đã lưu!";
-      await loadAllTasks();
-      setTimeout(() => {
-        btn.disabled = false;
-        btn.textContent = oldText;
-      }, 1500);
-    }
+    btn.textContent = "✓ Đã lưu!";
+    await loadAllTasks();
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.textContent = oldText;
+    }, 1500);
   } catch (err) {
     alert("Không thể lưu trang này.");
     btn.disabled = false;
@@ -745,16 +712,8 @@ async function handleSaveCurrentTab() {
 
 async function updateTaskStatus(taskId, status) {
   if (!currentAuth?.accessToken || taskId.startsWith("temp-")) return;
-  const apiBase = currentAuth.apiBase || "https://exe-studio.onrender.com";
   try {
-    await fetch(`${apiBase}/api/v1/tasks/${taskId}`, {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${currentAuth.accessToken}`,
-      },
-      body: JSON.stringify({ status }),
-    });
+    await api.patch(`/tasks/${taskId}`, { status });
   } catch (e) {
     console.error("Lỗi update task:", e);
   }
@@ -762,7 +721,6 @@ async function updateTaskStatus(taskId, status) {
 
 async function deleteTask(taskId) {
   if (!currentAuth?.accessToken) return;
-  const apiBase = currentAuth.apiBase || "https://exe-studio.onrender.com";
 
   allTasks = allTasks.filter((t) => t.id !== taskId);
   if (currentFocusTask?.id === taskId) {
@@ -773,12 +731,7 @@ async function deleteTask(taskId) {
   renderTaskList();
 
   try {
-    await fetch(`${apiBase}/api/v1/tasks/${taskId}`, {
-      method: "DELETE",
-      headers: {
-        Authorization: `Bearer ${currentAuth.accessToken}`,
-      },
-    });
+    await api.delete(`/tasks/${taskId}`);
   } catch (e) {
     console.error("Lỗi xóa task:", e);
   }
@@ -789,16 +742,9 @@ async function deleteTask(taskId) {
 // Tải danh sách ghi chú từ server
 async function loadRecentNotes() {
   if (!currentAuth?.accessToken) return;
-  const apiBase = currentAuth.apiBase || "https://exe-studio.onrender.com";
 
   try {
-    const res = await fetch(`${apiBase}/api/v1/notes/`, {
-      headers: {
-        Authorization: `Bearer ${currentAuth.accessToken}`,
-      },
-    });
-    if (!res.ok) return;
-    const data = await res.json();
+    const data = await api.get("/notes/");
     allNotes = Array.isArray(data?.notes) ? data.notes : [];
     renderNotesList();
   } catch (err) {
@@ -964,31 +910,23 @@ async function handleSaveNote() {
   saveBtn.disabled = true;
   saveBtn.textContent = "Đang lưu...";
 
-  const apiBase = currentAuth.apiBase || "https://exe-studio.onrender.com";
   try {
-    const res = await fetch(`${apiBase}/api/v1/notes/`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${currentAuth.accessToken}`,
-      },
-      body: JSON.stringify({ title, content }),
-    });
+    await api.post("/notes/", { title, content });
 
-    if (res.ok) {
-      titleInput.value = "";
-      contentArea.value = "";
-      chrome.storage.local.remove("studioNoteDraft");
-      statusEl.textContent = "✓ Đã lưu thành công lên Stuđiô!";
-      setTimeout(() => {
-        statusEl.textContent = "💡 Chuột phải trên web để note tức thì";
-      }, 3000);
-      await loadRecentNotes();
+    titleInput.value = "";
+    contentArea.value = "";
+    chrome.storage.local.remove("studioNoteDraft");
+    statusEl.textContent = "✓ Đã lưu thành công lên Stuđiô!";
+    setTimeout(() => {
+      statusEl.textContent = "💡 Chuột phải trên web để note tức thì";
+    }, 3000);
+    await loadRecentNotes();
+  } catch (err) {
+    if (err?.code === "network_error" || err?.code === "timeout") {
+      alert("Lỗi kết nối khi lưu ghi chú.");
     } else {
       alert("Không thể lưu ghi chú. Vui lòng thử lại.");
     }
-  } catch (err) {
-    alert("Lỗi kết nối khi lưu ghi chú.");
   } finally {
     saveBtn.disabled = false;
     saveBtn.textContent = "💾 Lưu ghi chú";
@@ -1002,29 +940,19 @@ async function convertNoteToTask(note) {
   const taskTitle = note.title;
   const description = note.content || "";
 
-  const apiBase = currentAuth.apiBase || "https://exe-studio.onrender.com";
   try {
-    const res = await fetch(`${apiBase}/api/v1/tasks/`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${currentAuth.accessToken}`,
-      },
-      body: JSON.stringify({
-        title: taskTitle,
-        description,
-        priority: "high",
-        status: "pending",
-        duration_minutes: 30,
-        source: "extension",
-      }),
+    await api.post("/tasks/", {
+      title: taskTitle,
+      description,
+      priority: "high",
+      status: "pending",
+      duration_minutes: 30,
+      source: "extension",
     });
 
-    if (res.ok) {
-      await loadAllTasks();
-      // Chuyển sang tab Việc cần làm
-      document.querySelector('.mode-btn[data-view="view-tasks"]').click();
-    }
+    await loadAllTasks();
+    // Chuyển sang tab Việc cần làm
+    document.querySelector('.mode-btn[data-view="view-tasks"]').click();
   } catch (e) {
     alert("Không thể chuyển ghi chú thành việc cần làm.");
   }
@@ -1032,18 +960,12 @@ async function convertNoteToTask(note) {
 
 async function deleteNote(noteId) {
   if (!currentAuth?.accessToken) return;
-  const apiBase = currentAuth.apiBase || "https://exe-studio.onrender.com";
 
   allNotes = allNotes.filter((n) => n.id !== noteId);
   renderNotesList();
 
   try {
-    await fetch(`${apiBase}/api/v1/notes/${noteId}`, {
-      method: "DELETE",
-      headers: {
-        Authorization: `Bearer ${currentAuth.accessToken}`,
-      },
-    });
+    await api.delete(`/notes/${noteId}`);
   } catch (e) {
     console.error("Lỗi xóa note:", e);
   }
