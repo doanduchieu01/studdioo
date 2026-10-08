@@ -5,6 +5,7 @@
 
 import { createApiClient } from "./lib/api.js";
 import { createSyncEngine } from "./lib/sync-engine.js";
+import { newTaskId } from "./lib/task-sync.js";
 
 const AUTH_KEY = "studioAuth";
 const TIMER_KEY = "studioTimer";
@@ -47,9 +48,34 @@ async function writeSyncState(next) {
   });
 }
 
+// The engine pushes through this recording wrapper (pass-through for reads)
+// so message handlers can echo the exact server response for a just-flushed
+// op back to the caller (TaskPad/sidepanel update on flush completion).
+// ApiClient methods are context-free closures, so spreading is safe.
+const lastWriteResponses = new Map();
+function rememberWrite(key, response) {
+  lastWriteResponses.set(key, response);
+  while (lastWriteResponses.size > 50) {
+    lastWriteResponses.delete(lastWriteResponses.keys().next().value);
+  }
+}
+const syncApi = {
+  ...api,
+  post: async (path, body, opts) => {
+    const res = await api.post(path, body, opts);
+    try { rememberWrite(`POST ${path} ${body?.id ?? ""}`, res); } catch {}
+    return res;
+  },
+  patch: async (path, body, opts) => {
+    const res = await api.patch(path, body, opts);
+    try { rememberWrite(`PATCH ${path}`, res); } catch {}
+    return res;
+  },
+};
+
 const syncEngine = createSyncEngine({
   storage: chrome.storage,
-  api,
+  api: syncApi,
   readState: readSyncState,
   writeState: writeSyncState,
 });
@@ -68,6 +94,7 @@ async function cachedRevision(taskId) {
 // Enqueue a task op, flush immediately when online, pull after a push so the
 // cache (and any UI reading it) converges. Mirrors archived background.js:
 // conflicts are kept as history entries + surfaced via notification.
+// Returns the server echo for the op when it flushed (null when still queued).
 async function enqueueAndSync(op) {
   const queued = await syncEngine.enqueue(op);
   if (queued.dropped > 0) {
@@ -80,7 +107,13 @@ async function enqueueAndSync(op) {
       `${result.flushed.conflicts} thay đổi bị bản web mới hơn thay thế. Mở Lịch sử đồng bộ để xem/khôi phục.`
     );
   }
-  return { queued, ...result };
+  let echo = null;
+  try {
+    const method = String(op.method ?? "POST").toUpperCase();
+    if (method === "POST") echo = lastWriteResponses.get(`POST ${op.path} ${op.body?.id ?? ""}`) ?? null;
+    else if (method === "PATCH") echo = lastWriteResponses.get(`PATCH ${op.path}`) ?? null;
+  } catch {}
+  return { queued, echo, ...(result ?? {}) };
 }
 
 // Kích hoạt tính năng mở SidePanel khi bấm vào biểu tượng tiện ích
@@ -179,18 +212,24 @@ chrome.contextMenus?.onClicked.addListener(async (info, tab) => {
     }
   }
 
-  // 2. Tạo việc cần làm từ đoạn trích
+  // 2. Tạo việc cần làm từ đoạn trích (qua outbox: client UUID + flush ngay)
   if (info.menuItemId === "studi-save-selection-task" && info.selectionText) {
     try {
       const taskTitle = info.selectionText.trim().slice(0, 100);
-      await api.post("/tasks/", {
-        title: taskTitle,
-        description: `Trích từ trang: ${pageTitle}\nNguồn: ${pageUrl}`,
-        source_url: pageUrl,
-        source_title: pageTitle,
-        priority: "high",
-        duration_minutes: 30,
-        source: "capture",
+      await enqueueAndSync({
+        kind: "task",
+        method: "POST",
+        path: "/tasks/",
+        body: {
+          id: newTaskId(),
+          title: taskTitle,
+          description: `Trích từ trang: ${pageTitle}\nNguồn: ${pageUrl}`,
+          source_url: pageUrl,
+          source_title: pageTitle,
+          priority: "high",
+          duration_minutes: 30,
+          source: "capture",
+        },
       });
       notify("📌 Đã tạo việc cần làm", `"${taskTitle}" đã được đưa vào Danh sách việc!`);
     } catch {
@@ -198,18 +237,24 @@ chrome.contextMenus?.onClicked.addListener(async (info, tab) => {
     }
   }
 
-  // 3. Lưu trang web vào Việc cần làm
+  // 3. Lưu trang web vào Việc cần làm (qua outbox)
   if (info.menuItemId === "studi-save-page-task") {
     try {
       const title = `Nghiên cứu: ${pageTitle.slice(0, 80)}`;
-      await api.post("/tasks/", {
-        title,
-        description: `Nguồn thu thập: ${pageUrl}`,
-        source_url: pageUrl,
-        source_title: pageTitle,
-        priority: "medium",
-        duration_minutes: 30,
-        source: "capture",
+      await enqueueAndSync({
+        kind: "task",
+        method: "POST",
+        path: "/tasks/",
+        body: {
+          id: newTaskId(),
+          title,
+          description: `Nguồn thu thập: ${pageUrl}`,
+          source_url: pageUrl,
+          source_title: pageTitle,
+          priority: "medium",
+          duration_minutes: 30,
+          source: "capture",
+        },
       });
       notify("🌐 Đã lưu trang vào Stuđiô", `Đã tạo việc nghiên cứu cho "${pageTitle}"!`);
     } catch {
@@ -527,19 +572,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const currentTab = tabs[0];
       if (!currentTab?.url) throw new Error("Không thể đọc tab hiện tại.");
 
-      const apiBase = auth.apiBase || DEFAULT_API_BASE;
       const title = `Nghiên cứu: ${(currentTab.title || "Tài liệu học tập").slice(0, 100)}`;
       const notes = `Nguồn thu thập: ${currentTab.url}`;
 
       try {
-        await api.post("/tasks/", {
-          title,
-          description: notes,
-          source_url: currentTab.url,
-          source_title: (currentTab.title || "").slice(0, 500),
-          priority: "medium",
-          duration_minutes: 30,
-          source: "capture",
+        await enqueueAndSync({
+          kind: "task",
+          method: "POST",
+          path: "/tasks/",
+          body: {
+            id: newTaskId(),
+            title,
+            description: notes,
+            source_url: currentTab.url,
+            source_title: (currentTab.title || "").slice(0, 500),
+            priority: "medium",
+            duration_minutes: 30,
+            source: "capture",
+          },
         });
       } catch (err) {
         const status = String(err?.code ?? "").startsWith("http_") ? err.code.slice(5) : "?";
@@ -550,16 +600,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       return { success: true, title };
     }
 
-    // Toggle trạng thái micro-sprint (subtask)
+    // Toggle trạng thái micro-sprint (subtask) — qua outbox, flush ngay
     if (type === "companion:toggle-subtask") {
       const { subtaskId } = request.payload || {};
       const auth = (await chrome.storage.local.get(AUTH_KEY))?.[AUTH_KEY];
       if (!auth?.accessToken) throw new Error("Vui lòng kết nối tài khoản Stuđiô AI.");
-      const apiBase = auth.apiBase || DEFAULT_API_BASE;
 
-      let updatedSubtask;
+      let updatedSubtask = null;
       try {
-        updatedSubtask = await api.patch(`/tasks/subtasks/${subtaskId}/toggle`, undefined);
+        ({ echo: updatedSubtask } = await enqueueAndSync({
+          kind: "task",
+          method: "PATCH",
+          path: `/tasks/subtasks/${subtaskId}/toggle`,
+          body: undefined,
+          recordId: null,
+        }));
       } catch (err) {
         const status = String(err?.code ?? "").startsWith("http_") ? err.code.slice(5) : "?";
         throw new Error(`Lỗi cập nhật micro-sprint (${status}).`);
@@ -570,7 +625,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (pinned && Array.isArray(pinned.subtasks)) {
         const sub = pinned.subtasks.find((s) => s.id === subtaskId);
         if (sub) {
-          sub.is_completed = updatedSubtask.is_completed;
+          if (updatedSubtask && typeof updatedSubtask.is_completed === "boolean") {
+            sub.is_completed = updatedSubtask.is_completed;
+          }
           pinned.completed_sprints = pinned.subtasks.filter((s) => s.is_completed).length;
           if (pinned.completed_sprints === pinned.subtasks.length) {
             pinned.status = "completed";
@@ -579,52 +636,92 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
       }
 
-      return { success: true, subtask: updatedSubtask };
+      return { success: true, subtask: updatedSubtask ?? { id: subtaskId } };
     }
 
-    // Toggle trạng thái task chính
+    // Toggle trạng thái task chính — qua outbox (PATCH + If-Match từ cache)
     if (type === "companion:toggle-task") {
       const { taskId, status } = request.payload || {};
       const auth = (await chrome.storage.local.get(AUTH_KEY))?.[AUTH_KEY];
       if (!auth?.accessToken) throw new Error("Chưa kết nối tài khoản.");
-      const apiBase = auth.apiBase || DEFAULT_API_BASE;
 
-      let updatedTask;
+      let updatedTask = null;
       try {
-        updatedTask = await api.patch(`/tasks/${taskId}`, { status });
+        ({ echo: updatedTask } = await enqueueAndSync({
+          kind: "task",
+          method: "PATCH",
+          path: `/tasks/${taskId}`,
+          body: { status },
+          ifMatch: await cachedRevision(taskId),
+          recordId: taskId,
+        }));
       } catch {
         throw new Error("Không thể cập nhật task.");
       }
+      const task = updatedTask && updatedTask.id ? updatedTask : { id: taskId, status };
 
       const pinned = (await chrome.storage.local.get("studioPinnedTask"))?.studioPinnedTask;
       if (pinned && pinned.id === taskId) {
-        pinned.status = status;
+        pinned.status = task.status ?? status;
+        if (task.revision != null) pinned.revision = task.revision;
         await chrome.storage.local.set({ studioPinnedTask: pinned });
       }
 
-      return { success: true, task: updatedTask };
+      return { success: true, task };
     }
 
-    // Tạo task nhanh từ Floating Widget trên trang web
-    if (type === "companion:create-task") {
-      const { title, description } = request.payload || {};
+    // Xóa task — qua outbox (DELETE + flush ngay)
+    if (type === "companion:delete-task") {
+      const { taskId } = request.payload || {};
+      if (!taskId) throw new Error("Thiếu taskId.");
       const auth = (await chrome.storage.local.get(AUTH_KEY))?.[AUTH_KEY];
       if (!auth?.accessToken) throw new Error("Chưa kết nối tài khoản.");
-      const apiBase = auth.apiBase || DEFAULT_API_BASE;
 
-      let created;
+      await enqueueAndSync({
+        kind: "task",
+        method: "DELETE",
+        path: `/tasks/${taskId}`,
+        recordId: taskId,
+      });
+
+      const pinned = (await chrome.storage.local.get("studioPinnedTask"))?.studioPinnedTask;
+      if (pinned && pinned.id === taskId) {
+        await chrome.storage.local.remove("studioPinnedTask");
+      }
+
+      return { success: true };
+    }
+
+    // Tạo task nhanh từ Floating Widget trên trang web — qua outbox
+    // (client UUID + flush ngay; offline vẫn success, op nằm chờ trong outbox)
+    if (type === "companion:create-task") {
+      const { title, description, priority, duration_minutes, source, source_url, source_title } = request.payload || {};
+      const auth = (await chrome.storage.local.get(AUTH_KEY))?.[AUTH_KEY];
+      if (!auth?.accessToken) throw new Error("Chưa kết nối tài khoản.");
+
+      const id = newTaskId();
+      let created = null;
       try {
-        created = await api.post("/tasks/", {
-          title,
-          description: description || "Ghi nhanh từ Floating TaskPad",
-          priority: "high",
-          duration_minutes: 25,
-          source: "floating_widget",
-        });
+        ({ echo: created } = await enqueueAndSync({
+          kind: "task",
+          method: "POST",
+          path: "/tasks/",
+          body: {
+            id,
+            title,
+            description: description || "Ghi nhanh từ Floating TaskPad",
+            priority: priority || "high",
+            duration_minutes: duration_minutes ?? 25,
+            source: source || "floating_widget",
+            ...(source_url ? { source_url } : {}),
+            ...(source_title ? { source_title } : {}),
+          },
+          recordId: id,
+        }));
       } catch {
         throw new Error("Không thể tạo task.");
       }
-      return { success: true, task: created };
+      return { success: true, task: created && created.id ? created : { id, title, status: "pending" } };
     }
 
     // Mở SidePanel từ floating widget trên trang web
@@ -739,14 +836,19 @@ if (chrome.omnibox) {
       return;
     }
 
-    const apiBase = auth.apiBase || DEFAULT_API_BASE;
     try {
-      await api.post("/tasks/", {
-        title: taskTitle,
-        description: "Tạo từ thanh địa chỉ Omnibar",
-        priority: "high",
-        duration_minutes: 30,
-        source: "extension",
+      await enqueueAndSync({
+        kind: "task",
+        method: "POST",
+        path: "/tasks/",
+        body: {
+          id: newTaskId(),
+          title: taskTitle,
+          description: "Tạo từ thanh địa chỉ Omnibar",
+          priority: "high",
+          duration_minutes: 30,
+          source: "extension",
+        },
       });
       notify("✨ Đã tạo công việc từ Omnibar", `"${taskTitle}" đã được đưa vào Danh sách Việc cần làm!`);
     } catch (err) {
