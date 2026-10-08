@@ -41,8 +41,12 @@ async function initCompanion() {
   }
 
   if (currentAuth?.accessToken) {
+    // Báo sidepanel vừa mở để background pull hội tụ với bản web,
+    // rồi mới tải danh sách + trạng thái đồng bộ để hiển thị.
+    await chrome.runtime.sendMessage({ type: "companion:sidepanel-opened" }).catch(() => {});
     await loadAllTasks();
     await loadRecentNotes();
+    await loadSyncStatus();
   }
 
   // Khôi phục bản nháp ghi chú chưa lưu
@@ -331,6 +335,7 @@ async function handleLogout() {
   updateAuthUI(null);
   renderTaskList();
   renderNotesList();
+  document.getElementById("syncCard").style.display = "none";
 }
 
 // ================= 4. PHẦN VIỆC CẦN LÀM (TASKS & CHECKLIST) =================
@@ -591,11 +596,17 @@ async function toggleSubtask(taskId, subtaskId) {
   }
 
   try {
-    const updatedSub = await api.patch(`/tasks/subtasks/${subtaskId}/toggle`, undefined);
-    if (parentTask && Array.isArray(parentTask.subtasks)) {
+    // Qua outbox (flush ngay); server echo dùng để chốt trạng thái subtask.
+    const res = await chrome.runtime.sendMessage({
+      type: "companion:toggle-subtask",
+      payload: { subtaskId },
+    });
+    const updatedSub = res?.data?.subtask ?? res?.subtask ?? null;
+    if (parentTask && Array.isArray(parentTask.subtasks) && typeof updatedSub?.is_completed === "boolean") {
       const sub = parentTask.subtasks.find((s) => s.id === subtaskId);
       if (sub) sub.is_completed = updatedSub.is_completed;
     }
+    await loadSyncStatus();
   } catch (err) {
     console.error("Lỗi toggle subtask:", err);
   }
@@ -623,19 +634,24 @@ async function handleQuickAdd(title) {
   renderTaskList();
 
   try {
-    const created = await api.post("/tasks/", {
-      title,
-      priority: "high",
-      status: "pending",
-      duration_minutes: 30,
-      source: "extension",
-      description: "Ghi nhanh từ Stuđiô TaskPad",
+    // Qua outbox (client UUID + flush ngay); bản tạo xong về trong response.
+    const res = await chrome.runtime.sendMessage({
+      type: "companion:create-task",
+      payload: {
+        title,
+        description: "Ghi nhanh từ Stuđiô TaskPad",
+        priority: "high",
+        duration_minutes: 30,
+        source: "extension",
+      },
     });
-    tempTask.id = created.id;
-    if (!currentFocusTask) {
-      pinTaskToHero(created);
+    const created = res?.data?.task ?? res?.task ?? null;
+    if (created?.id) {
+      tempTask.id = created.id;
+      if (!currentFocusTask) pinTaskToHero(created);
     }
-    renderTaskList();
+    await loadAllTasks();
+    await loadSyncStatus();
   } catch (err) {
     console.error("Lỗi tạo task:", err);
     await loadAllTasks();
@@ -651,22 +667,26 @@ async function handleSaveCurrentTab() {
   btn.disabled = true;
   btn.textContent = "Đang lưu...";
 
-  const apiBase = currentAuth.apiBase || "https://exe-studio.onrender.com";
   const title = `Nghiên cứu: ${(activeWebTab.title || "Tài liệu học").slice(0, 80)}`;
 
   try {
-    await api.post("/tasks/", {
-      title,
-      description: `Nguồn thu thập: ${activeWebTab.url}`,
-      source_url: activeWebTab.url,
-      source_title: (activeWebTab.title || "").slice(0, 500),
-      priority: "medium",
-      duration_minutes: 30,
-      source: "capture",
+    // Qua outbox (flush ngay); UI refresh từ server sau.
+    await chrome.runtime.sendMessage({
+      type: "companion:create-task",
+      payload: {
+        title,
+        description: `Nguồn thu thập: ${activeWebTab.url}`,
+        source_url: activeWebTab.url,
+        source_title: (activeWebTab.title || "").slice(0, 500),
+        priority: "medium",
+        duration_minutes: 30,
+        source: "capture",
+      },
     });
 
     btn.textContent = "✓ Đã lưu!";
     await loadAllTasks();
+    await loadSyncStatus();
     setTimeout(() => {
       btn.disabled = false;
       btn.textContent = oldText;
@@ -681,7 +701,12 @@ async function handleSaveCurrentTab() {
 async function updateTaskStatus(taskId, status) {
   if (!currentAuth?.accessToken || taskId.startsWith("temp-")) return;
   try {
-    await api.patch(`/tasks/${taskId}`, { status });
+    // Qua outbox (PATCH + If-Match, flush ngay); UI refresh từ server sau.
+    await chrome.runtime.sendMessage({
+      type: "companion:toggle-task",
+      payload: { taskId, status },
+    });
+    await loadSyncStatus();
   } catch (e) {
     console.error("Lỗi update task:", e);
   }
@@ -699,9 +724,134 @@ async function deleteTask(taskId) {
   renderTaskList();
 
   try {
-    await api.delete(`/tasks/${taskId}`);
+    // Qua outbox (DELETE + flush ngay).
+    await chrome.runtime.sendMessage({
+      type: "companion:delete-task",
+      payload: { taskId },
+    });
+    await loadSyncStatus();
   } catch (e) {
     console.error("Lỗi xóa task:", e);
+  }
+}
+
+// ================= 4b. ĐỒNG BỘ OFFLINE-FIRST (trạng thái + lịch sử) =================
+// Port CONCEPT của archived sync-view.js vào đúng DOM style của sidepanel:
+// card tĩnh + fill số liệu + nút Đồng bộ/Thử lại/Khôi phục qua message sync:*.
+let syncStatusCache = null;
+let syncConflictsCache = [];
+
+function relativeTimeVi(at) {
+  if (!at) return "chưa bao giờ";
+  const minutes = Math.max(0, Math.round((Date.now() - at) / 60000));
+  if (minutes < 1) return "vừa xong";
+  if (minutes < 60) return `${minutes} phút trước`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} giờ trước`;
+  return `${Math.round(hours / 24)} ngày trước`;
+}
+
+function syncStateLabel(status) {
+  if (!currentAuth?.accessToken) return { text: "Chỉ trên máy", tone: "" };
+  if ((status?.dead ?? 0) > 0) return { text: "Cần xem lại", tone: "warn" };
+  if ((status?.conflicts ?? 0) > 0) return { text: "Cần bạn xem", tone: "warn" };
+  if ((status?.pending ?? 0) > 0) return { text: "Đang chờ gửi", tone: "" };
+  return { text: "Đã đồng bộ", tone: "ok" };
+}
+
+async function loadSyncStatus() {
+  if (!currentAuth?.accessToken) {
+    document.getElementById("syncCard").style.display = "none";
+    return;
+  }
+  try {
+    const [st, cf] = await Promise.all([
+      chrome.runtime.sendMessage({ type: "sync:status" }).catch(() => null),
+      chrome.runtime.sendMessage({ type: "sync:conflicts" }).catch(() => null),
+    ]);
+    syncStatusCache = st?.data ?? st ?? null;
+    const list = cf?.data ?? cf ?? [];
+    syncConflictsCache = Array.isArray(list) ? list : [];
+  } catch (e) {
+    console.error("Lỗi tải trạng thái đồng bộ:", e);
+  }
+  renderSyncCard();
+}
+
+function renderSyncCard() {
+  const card = document.getElementById("syncCard");
+  if (!card || !currentAuth?.accessToken) return;
+  card.style.display = "flex";
+  const status = syncStatusCache ?? { pending: 0, dead: 0, conflicts: 0, lastPullAt: 0, lastPushAt: 0 };
+
+  const label = syncStateLabel(status);
+  const stateEl = document.getElementById("syncState");
+  stateEl.textContent = label.text;
+  stateEl.className = `sync-state ${label.tone}`;
+
+  document.getElementById("syncStats").innerHTML =
+    `Chờ gửi <strong>${status.pending ?? 0}</strong>` +
+    ` · Lỗi <strong>${status.dead ?? 0}</strong>` +
+    ` · Xung đột <strong>${syncConflictsCache.length}</strong>`;
+
+  document.getElementById("syncMeta").textContent =
+    `Kéo về: ${relativeTimeVi(status.lastPullAt)} · Gửi lên: ${relativeTimeVi(status.lastPushAt)}`;
+
+  document.getElementById("btnSyncRetry").style.display = (status.dead ?? 0) > 0 ? "" : "none";
+
+  const historyEl = document.getElementById("syncHistory");
+  historyEl.innerHTML = "";
+  syncConflictsCache.slice().reverse().forEach((item) => {
+    const snap = item?.localSnapshot ?? {};
+    const name = snap.title || snap.label || item?.recordId || "Không rõ";
+    const row = document.createElement("div");
+    row.className = "sync-history-item";
+    row.innerHTML = `
+      <div class="sync-history-name truncate" title="${name.replaceAll('"', "&quot;")}">${name}</div>
+      <span class="sync-history-meta">${item?.kind === "schedule" ? "Khối lịch" : "Việc"} · web v${item?.serverRevision ?? "—"}</span>
+    `;
+    const btn = document.createElement("button");
+    btn.className = "btn-restore";
+    btn.textContent = "Khôi phục bản này";
+    btn.dataset.conflictId = item.id;
+    row.appendChild(btn);
+    historyEl.appendChild(row);
+  });
+}
+
+async function handleSyncNow() {
+  const btn = document.getElementById("btnSyncNow");
+  btn.disabled = true;
+  btn.textContent = "Đang đồng bộ…";
+  try {
+    await chrome.runtime.sendMessage({ type: "sync:now" });
+    await loadAllTasks();
+    await loadSyncStatus();
+  } catch (e) {
+    console.error("Lỗi đồng bộ:", e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Đồng bộ ngay";
+  }
+}
+
+async function handleSyncRetry() {
+  try {
+    await chrome.runtime.sendMessage({ type: "sync:retry-dead" });
+    await loadSyncStatus();
+  } catch (e) {
+    console.error("Lỗi thử lại:", e);
+  }
+}
+
+async function handleSyncRestore(conflictId) {
+  if (!conflictId) return;
+  try {
+    await chrome.runtime.sendMessage({ type: "sync:restore", conflictId });
+    await loadAllTasks();
+    await loadSyncStatus();
+  } catch (e) {
+    console.error("Lỗi khôi phục:", e);
   }
 }
 
@@ -909,16 +1059,20 @@ async function convertNoteToTask(note) {
   const description = note.content || "";
 
   try {
-    await api.post("/tasks/", {
-      title: taskTitle,
-      description,
-      priority: "high",
-      status: "pending",
-      duration_minutes: 30,
-      source: "extension",
+    // Qua outbox (flush ngay).
+    await chrome.runtime.sendMessage({
+      type: "companion:create-task",
+      payload: {
+        title: taskTitle,
+        description,
+        priority: "high",
+        duration_minutes: 30,
+        source: "extension",
+      },
     });
 
     await loadAllTasks();
+    await loadSyncStatus();
     // Chuyển sang tab Việc cần làm
     document.querySelector('.mode-btn[data-view="view-tasks"]').click();
   } catch (e) {
@@ -1108,6 +1262,14 @@ function setupEventListeners() {
   document.getElementById("btnGrabSelection")?.addEventListener("click", handleGrabSelection);
   document.getElementById("btnSaveNote")?.addEventListener("click", handleSaveNote);
   document.getElementById("btnRefreshNotes")?.addEventListener("click", loadRecentNotes);
+
+  // Đồng bộ: trạng thái + lịch sử xung đột
+  document.getElementById("btnSyncNow")?.addEventListener("click", handleSyncNow);
+  document.getElementById("btnSyncRetry")?.addEventListener("click", handleSyncRetry);
+  document.getElementById("syncHistory")?.addEventListener("click", (e) => {
+    const btn = e.target?.closest?.("[data-conflict-id]");
+    if (btn?.dataset?.conflictId) handleSyncRestore(btn.dataset.conflictId);
+  });
 
   document.getElementById("noteTitleInput")?.addEventListener("input", saveDraftNote);
   document.getElementById("noteContentInput")?.addEventListener("input", saveDraftNote);

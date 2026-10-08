@@ -164,6 +164,21 @@
             + Lưu nhanh
           </button>
         </div>
+
+        <!-- Đồng bộ offline-first: trạng thái outbox + lịch sử xung đột -->
+        <div id="syncCard" class="card sync-card" style="display: none;">
+          <div class="sync-header">
+            <span class="sync-title">🔄 Đồng bộ</span>
+            <span class="sync-state" id="syncState">…</span>
+          </div>
+          <div class="sync-stats" id="syncStats"></div>
+          <div class="sync-meta" id="syncMeta"></div>
+          <div class="sync-actions">
+            <button id="btnSyncNow" class="btn-pill btn-pill-primary">Đồng bộ ngay</button>
+            <button id="btnSyncRetry" class="btn-pill btn-pill-subtle" style="display: none;">Thử lại mục lỗi</button>
+          </div>
+          <div id="syncHistory" class="sync-history"></div>
+        </div>
       </div>
 
       <!-- ================= VIEW 2: SỔ GHI CHÉP & BẮT CONTEXT TRỰC TIẾP TỪ WEB ================= -->

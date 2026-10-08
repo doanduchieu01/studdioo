@@ -945,3 +945,21 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* 4. SYNC CARD (offline-first: trạng thái outbox + lịch sử xung đột) */
+.sync-card { display: flex; flex-direction: column; gap: 8px; }
+.sync-header { display: flex; align-items: center; justify-content: space-between; }
+.sync-title { font-size: 12.5px; font-weight: 700; color: #1e3a8a; }
+.sync-state { font-size: 10.5px; font-weight: 700; color: #475569; background: #f1f5f9; border: 1px solid #e2e8f0; padding: 1px 8px; border-radius: 9999px; }
+.sync-state.ok { color: #15803d; background: #f0fdf4; border-color: #bbf7d0; }
+.sync-state.warn { color: #b45309; background: #fffbeb; border-color: #fde68a; }
+.sync-stats { display: flex; gap: 12px; font-size: 11px; color: #475569; }
+.sync-stats strong { color: #0f172a; }
+.sync-meta { font-size: 10px; color: #94a3b8; }
+.sync-actions { display: flex; gap: 6px; }
+.sync-history { display: flex; flex-direction: column; gap: 6px; }
+.sync-history-item { display: flex; align-items: center; justify-content: space-between; gap: 6px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 6px 8px; font-size: 11px; }
+.sync-history-name { flex: 1; min-width: 0; font-weight: 600; color: #92400e; }
+.sync-history-meta { font-size: 10px; color: #b45309; }
+.btn-restore { background: #ffffff; border: 1px solid #f59e0b; color: #b45309; border-radius: 6px; padding: 3px 8px; font-size: 10.5px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.btn-restore:hover { background: #fef3c7; }
