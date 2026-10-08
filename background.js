@@ -295,6 +295,36 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
     // Cộng điểm phút tập trung hôm nay
     await recordActivityMinutes(timer?.durationMinutes || 25, 0);
+
+    // Báo cáo phiên focus lên backend (giữ nguyên notify + phút local ở trên).
+    // task_id CHỈ khi timer được start từ context task đã biết (payload
+    // studi:start-timer có taskId) — không bao giờ đoán mò theo taskTitle.
+    // Chưa đăng nhập / countdown trần không auth → bỏ qua lặng lẽ.
+    try {
+      const auth = (await chrome.storage.local.get(AUTH_KEY))?.[AUTH_KEY];
+      if (auth?.accessToken) {
+        const planned = Number(timer?.durationMinutes) || 25;
+        const startTime = Number(timer?.startTime) || Date.now();
+        const elapsed = (Date.now() - startTime) / 60000;
+        const actual = Math.min(planned, Math.max(0, Math.round(elapsed)));
+        const taskId = typeof timer?.taskId === "string" && timer.taskId ? timer.taskId : null;
+        await enqueueAndSync({
+          kind: "task",
+          method: "POST",
+          path: "/focus/session/complete",
+          body: {
+            id: newTaskId(),
+            planned_minutes: planned,
+            actual_minutes: actual,
+            started_at: new Date(startTime).toISOString(),
+            ...(taskId ? { task_id: taskId } : {}),
+          },
+          recordId: null,
+        });
+      }
+    } catch {
+      // Báo cáo focus là best-effort: không phá luồng chuông báo local.
+    }
   } else if (alarm.name === "daily-18-review") {
     const settings = (await chrome.storage.local.get(SETTINGS_KEY))?.[SETTINGS_KEY] || {};
     if (settings.dailyReview !== false) {
@@ -398,14 +428,18 @@ chrome.runtime.onMessageExternal?.addListener((request, sender, sendResponse) =>
     }
 
     // 4. Bật chuông báo hẹn giờ tập trung từ Web
+    // Contract giữ nguyên: web chỉ gửi { durationMinutes, taskTitle }.
+    // taskId là field TÙY CHỌN cho caller nào biết task context (sidepanel/
+    // TaskPad tương lai) — vắng thì phiên báo cáo không kèm task_id.
     if (type === "studi:start-timer") {
-      const { durationMinutes = 25, taskTitle = "" } = request.payload || {};
+      const { durationMinutes = 25, taskTitle = "", taskId = null } = request.payload || {};
       chrome.alarms.create("pomodoro-timer", { delayInMinutes: durationMinutes });
       await chrome.storage.local.set({
         [TIMER_KEY]: {
           isRunning: true,
           durationMinutes,
           taskTitle,
+          taskId: typeof taskId === "string" && taskId ? taskId : null,
           startTime: Date.now(),
         },
       });
