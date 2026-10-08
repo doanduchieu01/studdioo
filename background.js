@@ -669,13 +669,13 @@ if (chrome.commands) {
   });
 }
 
-// ---- OMNIBAR: Gõ 'studi <tên task>' trên thanh URL Chrome để tạo nhanh task ----
-if (chrome.omnibar) {
-  chrome.omnibar.setDefaultSuggestion({
+// ---- OMNIBOX: Gõ 'studi <tên task>' trên thanh URL Chrome để tạo nhanh task ----
+if (chrome.omnibox) {
+  chrome.omnibox.setDefaultSuggestion({
     description: "🌊 Stuđiô AI: Tạo nhanh công việc mới: <match>%s</match>",
   });
 
-  chrome.omnibar.onInputEntered.addListener(async (text) => {
+  chrome.omnibox.onInputEntered.addListener(async (text) => {
     const taskTitle = text.trim();
     if (!taskTitle) return;
 
