@@ -6,6 +6,7 @@
 import { createApiClient } from "./lib/api.js";
 import { createSyncEngine } from "./lib/sync-engine.js";
 import { newTaskId } from "./lib/task-sync.js";
+import { checkPageCapturable, isReadablePageUrl } from "./lib/page-capture.js";
 
 const AUTH_KEY = "studioAuth";
 const TIMER_KEY = "studioTimer";
@@ -214,6 +215,12 @@ chrome.contextMenus?.onClicked.addListener(async (info, tab) => {
 
   // 2. Tạo việc cần làm từ đoạn trích (qua outbox: client UUID + flush ngay)
   if (info.menuItemId === "studi-save-selection-task" && info.selectionText) {
+    // Capture gate: trang hệ thống/trống → toast rõ ràng, không tạo task rác.
+    const gate = checkPageCapturable({ url: pageUrl, title: tab?.title ?? "", selection: info.selectionText });
+    if (!gate.capturable) {
+      notify("⚠️ Stuđiô AI", gate.message);
+      return;
+    }
     try {
       const taskTitle = info.selectionText.trim().slice(0, 100);
       await enqueueAndSync({
@@ -239,6 +246,12 @@ chrome.contextMenus?.onClicked.addListener(async (info, tab) => {
 
   // 3. Lưu trang web vào Việc cần làm (qua outbox)
   if (info.menuItemId === "studi-save-page-task") {
+    // Capture gate: trang hệ thống/trống → toast rõ ràng, không tạo task rác.
+    const gate = checkPageCapturable({ url: pageUrl, title: tab?.title ?? "", selection: "" });
+    if (!gate.capturable) {
+      notify("⚠️ Stuđiô AI", gate.message);
+      return;
+    }
     try {
       const title = `Nghiên cứu: ${pageTitle.slice(0, 80)}`;
       await enqueueAndSync({
@@ -572,6 +585,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const currentTab = tabs[0];
       if (!currentTab?.url) throw new Error("Không thể đọc tab hiện tại.");
 
+      // Capture gate: trang hệ thống/trống → toast + lỗi rõ ràng, không task rác.
+      const gate = checkPageCapturable({ url: currentTab.url, title: currentTab.title ?? "", selection: "" });
+      if (!gate.capturable) {
+        notify("⚠️ Stuđiô AI", gate.message);
+        throw new Error(gate.message);
+      }
+
       const title = `Nghiên cứu: ${(currentTab.title || "Tài liệu học tập").slice(0, 100)}`;
       const notes = `Nguồn thu thập: ${currentTab.url}`;
 
@@ -837,6 +857,18 @@ if (chrome.omnibox) {
     }
 
     try {
+      // Đính kèm tab đang đọc làm nguồn (chỉ khi là trang http(s) đọc được;
+      // tab hệ thống → vẫn tạo task theo chữ đã gõ, nhưng không lưu source).
+      let sourceUrl = "";
+      let sourceTitle = "";
+      try {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        const tab = tabs?.[0];
+        if (tab?.url && isReadablePageUrl(tab.url)) {
+          sourceUrl = tab.url;
+          sourceTitle = String(tab.title ?? "").slice(0, 500);
+        }
+      } catch {}
       await enqueueAndSync({
         kind: "task",
         method: "POST",
@@ -848,6 +880,8 @@ if (chrome.omnibox) {
           priority: "high",
           duration_minutes: 30,
           source: "extension",
+          ...(sourceUrl ? { source_url: sourceUrl } : {}),
+          ...(sourceTitle ? { source_title: sourceTitle } : {}),
         },
       });
       notify("✨ Đã tạo công việc từ Omnibar", `"${taskTitle}" đã được đưa vào Danh sách Việc cần làm!`);
