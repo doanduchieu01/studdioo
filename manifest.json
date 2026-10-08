@@ -1,0 +1,75 @@
+{
+  "manifest_version": 3,
+  "name": "Stuđiô AI Companion",
+  "short_name": "Stuđiô AI",
+  "version": "1.0.0",
+  "description": "Tiện ích đồng hành học tập, nhịp sinh học và tập trung Calm Tech cho sinh viên",
+  "permissions": [
+    "activeTab",
+    "alarms",
+    "notifications",
+    "sidePanel",
+    "storage",
+    "tabs",
+    "scripting",
+    "idle",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Mở Stuđiô AI Companion",
+    "default_icon": {
+      "128": "icons/logo.png"
+    }
+  },
+  "externally_connectable": {
+    "matches": [
+      "https://exe-studio.onrender.com/*",
+      "http://localhost:5173/*",
+      "http://127.0.0.1:5173/*",
+      "http://localhost:8000/*",
+      "http://127.0.0.1:8000/*"
+    ]
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "omnibar": {
+    "keyword": "studi"
+  },
+  "commands": {
+    "toggle-taskpad": {
+      "suggested_key": {
+        "default": "Alt+S",
+        "mac": "Alt+S"
+      },
+      "description": "Bật/Thu gọn TaskPad nổi trên mọi trang web"
+    },
+    "quick-capture": {
+      "suggested_key": {
+        "default": "Alt+N",
+        "mac": "Alt+N"
+      },
+      "description": "Thu thập nhanh trang web hiện tại vào Stuđiô"
+    }
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsdlgHJOUFnGowb9A995Xa3hDFMURlLSb2u/IIcJ0G/E4QsBe0WdLPjLqG0ZrosVqDUm7n5peRwFLWcdwqR6gMZs7ybStiGhix+y+N5ZvgHrQXezOcOmy3xBDAm3JSZ9iTMoavHtzYetELYMTvJFWEmCQfegeze5XmrYwtx4m8VlKKgiY9NgeziD0xmePjBY2IODRv1coeq4O1N8YfZ5mC4GvEb7bmFIX+UwOWIOFcoc8+jU4qXino0xf9yvaPXHSN6yjopbfql+qNmshPmT0WGSccErgNm4hX6wGkqWXRX0C4nn7wjAYcVTnm8TX2YTLwsh7xJmnTykdUOfux1hu8QIDAQAB",
+  "icons": {
+    "128": "icons/logo.png"
+  }
+}

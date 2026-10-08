@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stuđiô Companion</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <div class="companion-container">
+      <!-- 1. Header Tinh Gọn -->
+      <header class="header">
+        <div class="logo-group">
+          <img src="icons/logo.png" alt="Logo" class="logo-img" />
+          <div>
+            <h1 class="logo-title">Stuđiô Companion</h1>
+            <p class="logo-sub">Ghim việc &amp; Ghi chú khi học</p>
+          </div>
+        </div>
+        <div class="header-right">
+          <div id="authStatus" class="badge-status disconnected" title="Tài khoản">
+            <span class="dot"></span>
+            <span id="authText">Chưa kết nối</span>
+          </div>
+          <button id="btnHeaderSync" class="btn-icon" title="Đồng bộ lại">↻</button>
+          <button id="btnHeaderLogout" class="btn-icon" title="Đăng xuất" style="display: none;">🚪</button>
+        </div>
+      </header>
+
+      <!-- Auth Prompt Banner (Chỉ hiện khi chưa đăng nhập) -->
+      <div id="authPromptCard" class="card auth-prompt-card">
+        <div class="auth-prompt-header">
+          <span class="auth-prompt-icon">🌊</span>
+          <div>
+            <div class="auth-prompt-title">Kết nối với Stuđiô Web</div>
+            <div class="auth-prompt-sub">Tự động nhận diện tab học tập đang mở</div>
+          </div>
+        </div>
+        <div class="auth-prompt-actions">
+          <button id="btnScanTabs" class="btn btn-primary btn-sm">
+            <span>🔄 Quét Tab Web đang mở</span>
+          </button>
+          <button id="btnQuickDemo" class="btn btn-secondary btn-sm">
+            <span>✨ Đăng nhập nhanh Châu Nguyễn</span>
+          </button>
+        </div>
+        <div id="authNotice" class="auth-notice" style="display: none;"></div>
+        <details class="auth-manual-toggle">
+          <summary>Đăng nhập bằng Email &amp; Mật khẩu</summary>
+          <form id="formManualLogin" class="manual-login-form">
+            <input type="email" id="loginEmail" placeholder="Email đăng nhập..." class="input-field" required />
+            <input type="password" id="loginPassword" placeholder="Mật khẩu..." class="input-field" required />
+            <button type="submit" id="btnLoginSubmit" class="btn btn-primary btn-sm">Đăng nhập</button>
+          </form>
+        </details>
+      </div>
+
+      <!-- 2. Thanh chuyển chế độ (Tasks vs Notes) -->
+      <nav class="mode-nav">
+        <button class="mode-btn active" data-view="view-tasks">
+          <span>📋 Việc cần làm</span>
+          <span class="mode-counter" id="badgePendingCount">0</span>
+        </button>
+        <button class="mode-btn" data-view="view-notes">
+          <span>📝 Sổ ghi chép</span>
+          <span class="mode-counter" id="badgeNotesCount">0</span>
+        </button>
+      </nav>
+
+      <!-- ================= VIEW 1: VIỆC CẦN LÀM & TÍCH GẠCH ================= -->
+      <div id="view-tasks" class="view-panel active">
+        <!-- Hero: Việc đang ghim tập trung -->
+        <div id="pinnedFocusCard" class="card pinned-focus-card">
+          <div class="pinned-header">
+            <span class="pinned-badge">🎯 VIỆC ĐANG TẬP TRUNG</span>
+            <div class="pinned-timer" id="timerDisplay">25:00</div>
+          </div>
+
+          <div class="pinned-task-row">
+            <label class="custom-checkbox pinned-check" title="Tích để hoàn thành việc này">
+              <input type="checkbox" id="checkPinnedTask" />
+              <span class="checkmark"></span>
+            </label>
+            <div class="pinned-task-title" id="pinnedTaskTitle">
+              Chọn 1 việc bên dưới hoặc gõ việc mới để bắt đầu
+            </div>
+          </div>
+
+          <div class="pinned-controls">
+            <button id="btnToggleTimer" class="btn-pill btn-pill-primary">▶ Bắt đầu đếm giờ</button>
+            <button id="btnResetTimer" class="btn-pill btn-pill-subtle">↺ 25p</button>
+            <div class="timer-presets-compact">
+              <button class="preset-pill active" data-min="25">25p</button>
+              <button class="preset-pill" data-min="50">50p</button>
+              <button class="preset-pill" data-min="15">15p</button>
+            </div>
+          </div>
+
+          <!-- Micro-sprint của việc đang tập trung -->
+          <div id="pinnedSubtasksSection" class="pinned-subtasks-section" style="display: none;">
+            <div class="pinned-subtasks-header">
+              <span class="pinned-subtasks-title">🎯 Micro-sprint (<span id="pinnedSprintCount">0/0</span>)</span>
+              <span class="pinned-subtasks-hint">Tích từng chặng 25p ✓</span>
+            </div>
+            <div id="pinnedSubtasksList" class="pinned-subtasks-list"></div>
+          </div>
+
+          <!-- Thanh bật/tắt ghim nổi ra mọi trang web -->
+          <div class="web-floating-toggle-bar">
+            <div class="web-floating-left">
+              <span class="floating-icon">📌</span>
+              <div class="floating-titles-wrap">
+                <span class="floating-text">Ghim TaskPad nổi trên mọi trang web</span>
+                <span class="floating-hint">Google, PDF, tài liệu, bài học... (Phím: Alt+S)</span>
+              </div>
+            </div>
+            <label class="switch-toggle" title="Bật/Tắt TaskPad nổi trực tiếp trên trang web bên ngoài (Alt+S)">
+              <input type="checkbox" id="toggleFloatingWidget" checked />
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- TaskPad Checklist & Quick Add -->
+        <div class="card taskpad-card">
+          <div class="quick-add-box">
+            <input
+              type="text"
+              id="quickAddInput"
+              placeholder="+ Gõ việc cần làm rồi ấn Enter..."
+              class="quick-add-input"
+              autocomplete="off"
+            />
+            <button id="btnQuickAddSubmit" class="btn-add-task" title="Thêm việc">+</button>
+          </div>
+
+          <div class="taskpad-filter-bar">
+            <div class="filter-tabs">
+              <button class="filter-tab active" data-filter="pending">
+                Cần làm (<span id="countPending">0</span>)
+              </button>
+              <button class="filter-tab" data-filter="completed">
+                Đã xong (<span id="countCompleted">0</span>)
+              </button>
+            </div>
+            <span class="filter-hint">Tick để gạch ngang việc ✓</span>
+          </div>
+
+          <ul id="taskList" class="task-checklist">
+            <li class="task-empty">Đang kết nối danh sách việc từ Stuđiô AI…</li>
+          </ul>
+        </div>
+
+        <!-- Smart Tab Capture (Thu gọn) -->
+        <div id="smartCaptureBox" class="card smart-capture-bar" style="display: none;">
+          <div class="smart-capture-left">
+            <span class="capture-icon" id="captureIcon">📌</span>
+            <div class="capture-text-wrap truncate">
+              <div class="capture-label">Lưu trang đang đọc vào Checklist:</div>
+              <div class="capture-title truncate" id="captureTabTitle">...</div>
+            </div>
+          </div>
+          <button id="btnSaveCurrentTab" class="btn-save-tab" title="Tạo công việc từ trang này">
+            + Lưu nhanh
+          </button>
+        </div>
+      </div>
+
+      <!-- ================= VIEW 2: SỔ GHI CHÉP & BẮT CONTEXT TRỰC TIẾP TỪ WEB ================= -->
+      <div id="view-notes" class="view-panel">
+        <div class="card notes-composer-card">
+          <!-- Web Context Grabber Tools -->
+          <div class="web-context-toolbar">
+            <button id="btnGrabVideoTimestamp" class="btn-tool" title="Bắt mốc thời gian video đang phát (YouTube/Coursera)">
+              ⏱️ Mốc video <span id="currentVideoTimeBadge" class="time-badge">00:00</span>
+            </button>
+            <button id="btnGrabSelection" class="btn-tool" title="Lấy chữ đang bôi đen trên trang web hiện tại">
+              📋 Trích đoạn bôi đen
+            </button>
+          </div>
+
+          <!-- Note Form -->
+          <input
+            type="text"
+            id="noteTitleInput"
+            placeholder="Tiêu đề ghi chú (hoặc để trống)..."
+            class="note-title-input"
+            autocomplete="off"
+          />
+          <textarea
+            id="noteContentInput"
+            placeholder="Ghi chép nhanh kiến thức, công thức, tóm tắt khi đang học bài..."
+            class="note-content-area"
+            rows="4"
+          ></textarea>
+
+          <div class="note-composer-footer">
+            <span class="note-autosave-status" id="noteSaveStatus">💡 Chuột phải trên web để note tức thì</span>
+            <button id="btnSaveNote" class="btn-save-note">💾 Lưu ghi chú</button>
+          </div>
+        </div>
+
+        <!-- Recent Notes List -->
+        <div class="card recent-notes-card">
+          <div class="notes-header">
+            <span class="notes-header-title">Ghi chú đã lưu</span>
+            <button id="btnRefreshNotes" class="btn-icon" title="Làm mới">↻</button>
+          </div>
+          <div id="recentNotesList" class="recent-notes-list">
+            <div class="task-empty">Chưa có ghi chú nào. Hãy bắt đầu ghi chép ở trên!</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. Chân trang nhịp học Mini & Mở Web App -->
+      <div class="circadian-mini-footer">
+        <div class="mini-stats">
+          <span>⏱️ <strong id="focusTimeVal">0p</strong> tập trung</span>
+          <span>•</span>
+          <span>🎧 <strong id="lectureTimeVal">0p</strong> bài giảng</span>
+        </div>
+        <a id="btnOpenWeb" href="https://exe-studio.onrender.com" target="_blank" class="link-open-web">
+          Mở Stuđiô Web ↗
+        </a>
+      </div>
+    </div>
+
+    <script type="module" src="sidepanel.js"></script>
+  </body>
+</html>
