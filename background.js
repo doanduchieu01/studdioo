@@ -3,6 +3,8 @@
  * Tiện ích đồng hành tập trung, chuông báo nhịp sinh học & nhận diện bài giảng học tập.
  */
 
+import { createApiClient } from "./lib/api.js";
+
 const AUTH_KEY = "studioAuth";
 const TIMER_KEY = "studioTimer";
 const SETTINGS_KEY = "studioCompanionSettings";
@@ -10,6 +12,10 @@ const ACTIVITY_KEY = "studioActivityToday";
 
 // API Base ưu tiên Render Production hoặc Local
 const DEFAULT_API_BASE = "https://exe-studio.onrender.com";
+
+// Single HTTP transport: every backend call goes through this client
+// (Bearer token + 401 -> refresh -> retry). Payloads/URLs unchanged.
+const api = createApiClient({ storage: chrome.storage, fetchImpl: (...args) => fetch(...args) });
 
 // Kích hoạt tính năng mở SidePanel khi bấm vào biểu tượng tiện ích
 chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch(() => {});
@@ -92,18 +98,11 @@ chrome.contextMenus?.onClicked.addListener(async (info, tab) => {
       const title = `Trích dẫn: ${pageTitle.slice(0, 60)}`;
       const content = `> "${quoteText}"\n\n🔗 Nguồn: [${pageTitle}](${pageUrl})\n⏰ Thời gian: ${new Date().toLocaleString("vi-VN")}`;
 
-      const res = await fetch(`${apiBase}/api/v1/notes/`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${auth.accessToken}`,
-        },
-        body: JSON.stringify({ title, content }),
-      });
-
-      if (res.ok) {
+      try {
+        await api.post("/notes/", { title, content });
         notify("📝 Đã lưu vào Ghi chú", `"${quoteText.slice(0, 50)}..." đã được lưu vào Sổ ghi chép Stuđiô!`);
-      } else {
+      } catch (err) {
+        if (err?.code === "network_error" || err?.code === "timeout") throw err;
         notify("❌ Lỗi lưu ghi chú", "Không thể gửi dữ liệu lên máy chủ Stuđiô.");
       }
     } catch {
@@ -115,26 +114,16 @@ chrome.contextMenus?.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "studi-save-selection-task" && info.selectionText) {
     try {
       const taskTitle = info.selectionText.trim().slice(0, 100);
-      const res = await fetch(`${apiBase}/api/v1/tasks/`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${auth.accessToken}`,
-        },
-        body: JSON.stringify({
-          title: taskTitle,
-          description: `Trích từ trang: ${pageTitle}\nNguồn: ${pageUrl}`,
-          source_url: pageUrl,
-          source_title: pageTitle,
-          priority: "high",
-          duration_minutes: 30,
-          source: "capture",
-        }),
+      await api.post("/tasks/", {
+        title: taskTitle,
+        description: `Trích từ trang: ${pageTitle}\nNguồn: ${pageUrl}`,
+        source_url: pageUrl,
+        source_title: pageTitle,
+        priority: "high",
+        duration_minutes: 30,
+        source: "capture",
       });
-
-      if (res.ok) {
-        notify("📌 Đã tạo việc cần làm", `"${taskTitle}" đã được đưa vào Danh sách việc!`);
-      }
+      notify("📌 Đã tạo việc cần làm", `"${taskTitle}" đã được đưa vào Danh sách việc!`);
     } catch {
       notify("❌ Lỗi kết nối", "Không thể tạo việc từ đoạn trích.");
     }
@@ -144,26 +133,16 @@ chrome.contextMenus?.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "studi-save-page-task") {
     try {
       const title = `Nghiên cứu: ${pageTitle.slice(0, 80)}`;
-      const res = await fetch(`${apiBase}/api/v1/tasks/`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${auth.accessToken}`,
-        },
-        body: JSON.stringify({
-          title,
-          description: `Nguồn thu thập: ${pageUrl}`,
-          source_url: pageUrl,
-          source_title: pageTitle,
-          priority: "medium",
-          duration_minutes: 30,
-          source: "capture",
-        }),
+      await api.post("/tasks/", {
+        title,
+        description: `Nguồn thu thập: ${pageUrl}`,
+        source_url: pageUrl,
+        source_title: pageTitle,
+        priority: "medium",
+        duration_minutes: 30,
+        source: "capture",
       });
-
-      if (res.ok) {
-        notify("🌐 Đã lưu trang vào Stuđiô", `Đã tạo việc nghiên cứu cho "${pageTitle}"!`);
-      }
+      notify("🌐 Đã lưu trang vào Stuđiô", `Đã tạo việc nghiên cứu cho "${pageTitle}"!`);
     } catch {
       notify("❌ Lỗi kết nối", "Không thể lưu trang này.");
     }
@@ -437,47 +416,27 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // Đăng nhập nhanh tài khoản mẫu (Demo) cho Châu Nguyễn
     if (type === "companion:demo-login") {
       const apiBase = request.payload?.apiBase || DEFAULT_API_BASE;
-      const res = await fetch(`${apiBase}/api/v1/auth/google`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id_token: "", email: "chau.nguyen@vnuhcm.edu.vn" }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || "Không thể đăng nhập tài khoản mẫu.");
+      try {
+        const authData = await api.loginWithGoogle({
+          id_token: "",
+          email: "chau.nguyen@vnuhcm.edu.vn",
+          apiBase,
+        });
+        return { success: true, auth: authData };
+      } catch (err) {
+        throw new Error(err?.message || "Không thể đăng nhập tài khoản mẫu.");
       }
-      const data = await res.json();
-      const authData = {
-        accessToken: data.access_token,
-        refreshToken: data.refresh_token,
-        user: data.user,
-        apiBase,
-      };
-      await chrome.storage.local.set({ [AUTH_KEY]: authData });
-      return { success: true, auth: authData };
     }
 
     // Đăng nhập thủ công qua Email & Mật khẩu
     if (type === "companion:manual-login") {
       const { email, password, apiBase = DEFAULT_API_BASE } = request.payload || {};
-      const res = await fetch(`${apiBase}/api/v1/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || "Email hoặc mật khẩu không chính xác.");
+      try {
+        const authData = await api.loginWithPassword({ email, password, apiBase });
+        return { success: true, auth: authData };
+      } catch (err) {
+        throw new Error(err?.message || "Email hoặc mật khẩu không chính xác.");
       }
-      const data = await res.json();
-      const authData = {
-        accessToken: data.access_token,
-        refreshToken: data.refresh_token,
-        user: data.user,
-        apiBase,
-      };
-      await chrome.storage.local.set({ [AUTH_KEY]: authData });
-      return { success: true, auth: authData };
     }
 
     // Đăng xuất khỏi Extension
@@ -501,13 +460,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const title = `Nghiên cứu: ${(currentTab.title || "Tài liệu học tập").slice(0, 100)}`;
       const notes = `Nguồn thu thập: ${currentTab.url}`;
 
-      const res = await fetch(`${apiBase}/api/v1/tasks/`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${auth.accessToken}`,
-        },
-        body: JSON.stringify({
+      try {
+        await api.post("/tasks/", {
           title,
           description: notes,
           source_url: currentTab.url,
@@ -515,11 +469,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           priority: "medium",
           duration_minutes: 30,
           source: "capture",
-        }),
-      });
-
-      if (!res.ok) {
-        throw new Error(`Lỗi máy chủ (${res.status}): Không thể lưu task.`);
+        });
+      } catch (err) {
+        const status = String(err?.code ?? "").startsWith("http_") ? err.code.slice(5) : "?";
+        throw new Error(`Lỗi máy chủ (${status}): Không thể lưu task.`);
       }
 
       notify("📌 Đã lưu vào Stuđiô AI", `Đã tạo công việc "${title}" thành công!`);
@@ -533,15 +486,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (!auth?.accessToken) throw new Error("Vui lòng kết nối tài khoản Stuđiô AI.");
       const apiBase = auth.apiBase || DEFAULT_API_BASE;
 
-      const res = await fetch(`${apiBase}/api/v1/tasks/subtasks/${subtaskId}/toggle`, {
-        method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${auth.accessToken}`,
-        },
-      });
-
-      if (!res.ok) throw new Error(`Lỗi cập nhật micro-sprint (${res.status}).`);
-      const updatedSubtask = await res.json();
+      let updatedSubtask;
+      try {
+        updatedSubtask = await api.patch(`/tasks/subtasks/${subtaskId}/toggle`, undefined);
+      } catch (err) {
+        const status = String(err?.code ?? "").startsWith("http_") ? err.code.slice(5) : "?";
+        throw new Error(`Lỗi cập nhật micro-sprint (${status}).`);
+      }
 
       // Đồng bộ vào studioPinnedTask trong storage nếu đang ghim task này
       const pinned = (await chrome.storage.local.get("studioPinnedTask"))?.studioPinnedTask;
@@ -567,17 +518,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (!auth?.accessToken) throw new Error("Chưa kết nối tài khoản.");
       const apiBase = auth.apiBase || DEFAULT_API_BASE;
 
-      const res = await fetch(`${apiBase}/api/v1/tasks/${taskId}`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${auth.accessToken}`,
-        },
-        body: JSON.stringify({ status }),
-      });
-
-      if (!res.ok) throw new Error("Không thể cập nhật task.");
-      const updatedTask = await res.json();
+      let updatedTask;
+      try {
+        updatedTask = await api.patch(`/tasks/${taskId}`, { status });
+      } catch {
+        throw new Error("Không thể cập nhật task.");
+      }
 
       const pinned = (await chrome.storage.local.get("studioPinnedTask"))?.studioPinnedTask;
       if (pinned && pinned.id === taskId) {
@@ -595,23 +541,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (!auth?.accessToken) throw new Error("Chưa kết nối tài khoản.");
       const apiBase = auth.apiBase || DEFAULT_API_BASE;
 
-      const res = await fetch(`${apiBase}/api/v1/tasks/`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${auth.accessToken}`,
-        },
-        body: JSON.stringify({
+      let created;
+      try {
+        created = await api.post("/tasks/", {
           title,
           description: description || "Ghi nhanh từ Floating TaskPad",
           priority: "high",
           duration_minutes: 25,
           source: "floating_widget",
-        }),
-      });
-
-      if (!res.ok) throw new Error("Không thể tạo task.");
-      const created = await res.json();
+        });
+      } catch {
+        throw new Error("Không thể tạo task.");
+      }
       return { success: true, task: created };
     }
 
@@ -637,13 +578,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (!auth?.accessToken) return { tasks: [] };
       const apiBase = auth.apiBase || DEFAULT_API_BASE;
       try {
-        const res = await fetch(`${apiBase}/api/v1/tasks/`, {
-          headers: { Authorization: `Bearer ${auth.accessToken}` },
-        });
-        if (res.ok) {
-          const tasks = await res.json();
-          return { tasks: Array.isArray(tasks) ? tasks : [] };
-        }
+        const tasks = await api.get("/tasks/");
+        return { tasks: Array.isArray(tasks) ? tasks : [] };
       } catch {}
       return { tasks: [] };
     }
@@ -654,19 +590,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const auth = (await chrome.storage.local.get(AUTH_KEY))?.[AUTH_KEY];
       if (!auth?.accessToken) throw new Error("Chưa kết nối tài khoản.");
       const apiBase = auth.apiBase || DEFAULT_API_BASE;
-      const res = await fetch(`${apiBase}/api/v1/notes/`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${auth.accessToken}`,
-        },
-        body: JSON.stringify({
+      let note;
+      try {
+        note = await api.post("/notes/", {
           title: title || "Ghi chép từ web",
           content: content || "",
-        }),
-      });
-      if (!res.ok) throw new Error("Không thể tạo ghi chú.");
-      const note = await res.json();
+        });
+      } catch {
+        throw new Error("Không thể tạo ghi chú.");
+      }
       return { success: true, note };
     }
 
@@ -713,28 +645,20 @@ if (chrome.omnibox) {
 
     const apiBase = auth.apiBase || DEFAULT_API_BASE;
     try {
-      const res = await fetch(`${apiBase}/api/v1/tasks/`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${auth.accessToken}`,
-        },
-        body: JSON.stringify({
-          title: taskTitle,
-          description: "Tạo từ thanh địa chỉ Omnibar",
-          priority: "high",
-          duration_minutes: 30,
-          source: "extension",
-        }),
+      await api.post("/tasks/", {
+        title: taskTitle,
+        description: "Tạo từ thanh địa chỉ Omnibar",
+        priority: "high",
+        duration_minutes: 30,
+        source: "extension",
       });
-
-      if (res.ok) {
-        notify("✨ Đã tạo công việc từ Omnibar", `"${taskTitle}" đã được đưa vào Danh sách Việc cần làm!`);
+      notify("✨ Đã tạo công việc từ Omnibar", `"${taskTitle}" đã được đưa vào Danh sách Việc cần làm!`);
+    } catch (err) {
+      if (err?.code === "network_error" || err?.code === "timeout") {
+        notify("❌ Lỗi kết nối", "Không thể gửi dữ liệu tới máy chủ Stuđiô AI.");
       } else {
         notify("❌ Lỗi tạo việc", "Không thể lưu việc lên máy chủ Stuđiô AI.");
       }
-    } catch (e) {
-      notify("❌ Lỗi kết nối", "Không thể gửi dữ liệu tới máy chủ Stuđiô AI.");
     }
   });
 }
