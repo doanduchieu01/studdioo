@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
+import { readFileSync } from "node:fs";
 import { makeChrome } from "./chrome-stub.js";
 
 function fakeTaskJson(status = 201, body = { id: "task-1" }) {
@@ -42,4 +43,10 @@ test("omnibox 'studi <title>' POSTs a task with that title", async (t) => {
   const payload = JSON.parse(posts[0].body);
   assert.equal(payload.title, "Hoc bai moi");
   assert.equal(posts[0].headers?.Authorization, "Bearer TOK");
+});
+
+test("manifest declares omnibox keyword 'studi' (MV3 key is omnibox, not omnibar)", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url)));
+  assert.equal(manifest.omnibox?.keyword, "studi");
+  assert.equal(manifest.omnibar, undefined);
 });
