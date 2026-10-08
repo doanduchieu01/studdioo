@@ -275,25 +275,11 @@ async function handleDemoLogin() {
 
   const apiBase = "https://exe-studio.onrender.com";
   try {
-    const res = await fetch(`${apiBase}/api/v1/auth/google`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id_token: "", email: "chau.nguyen@vnuhcm.edu.vn" }),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Không thể đăng nhập tài khoản mẫu.");
-    }
-
-    const data = await res.json();
-    const authData = {
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token,
-      user: data.user,
+    const authData = await api.loginWithGoogle({
+      id_token: "",
+      email: "chau.nguyen@vnuhcm.edu.vn",
       apiBase,
-    };
-    await chrome.storage.local.set({ studioAuth: authData });
+    });
     currentAuth = authData;
     updateAuthUI(currentAuth);
     await loadAllTasks();
@@ -320,25 +306,7 @@ async function handleManualLogin(e) {
 
   const apiBase = "https://exe-studio.onrender.com";
   try {
-    const res = await fetch(`${apiBase}/api/v1/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || "Sai email hoặc mật khẩu.");
-    }
-
-    const data = await res.json();
-    const authData = {
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token,
-      user: data.user,
-      apiBase,
-    };
-    await chrome.storage.local.set({ studioAuth: authData });
+    const authData = await api.loginWithPassword({ email, password, apiBase });
     currentAuth = authData;
     updateAuthUI(currentAuth);
     await loadAllTasks();
