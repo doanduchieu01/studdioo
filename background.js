@@ -4,11 +4,19 @@
  */
 
 import { createApiClient } from "./lib/api.js";
+import { createSyncEngine } from "./lib/sync-engine.js";
 
 const AUTH_KEY = "studioAuth";
 const TIMER_KEY = "studioTimer";
 const SETTINGS_KEY = "studioCompanionSettings";
 const ACTIVITY_KEY = "studioActivityToday";
+
+// Sync outbox pull-cache: minimal local mirror {tasks:[], schedule:[]} holding
+// RAW server records. Display + merge base only — never user-edited directly.
+// Server list stays the truth for display; the outbox gives write durability.
+const TASK_CACHE_KEY = "studioTaskCache";
+// Dedicated pull alarm (NOT the 1-min companion-heartbeat — avoid overloading it).
+const SYNC_PULL_ALARM = "sync-pull";
 
 // API Base ưu tiên Render Production hoặc Local
 const DEFAULT_API_BASE = "https://exe-studio.onrender.com";
@@ -16,6 +24,64 @@ const DEFAULT_API_BASE = "https://exe-studio.onrender.com";
 // Single HTTP transport: every backend call goes through this client
 // (Bearer token + 401 -> refresh -> retry). Payloads/URLs unchanged.
 const api = createApiClient({ storage: chrome.storage, fetchImpl: (...args) => fetch(...args) });
+
+// Offline-first sync engine: task writes go through the outbox (client UUID on
+// create, If-Match revision on patch); pull merges server state into the cache
+// while skipping records with pending ops. No local task DB — server list is
+// the truth for display, the outbox is the durability layer.
+async function readSyncState() {
+  const saved = await chrome.storage.local.get(TASK_CACHE_KEY);
+  const cache = saved?.[TASK_CACHE_KEY];
+  return {
+    tasks: Array.isArray(cache?.tasks) ? cache.tasks : [],
+    schedule: Array.isArray(cache?.schedule) ? cache.schedule : [],
+  };
+}
+
+async function writeSyncState(next) {
+  await chrome.storage.local.set({
+    [TASK_CACHE_KEY]: {
+      tasks: Array.isArray(next?.tasks) ? next.tasks : [],
+      schedule: Array.isArray(next?.schedule) ? next.schedule : [],
+    },
+  });
+}
+
+const syncEngine = createSyncEngine({
+  storage: chrome.storage,
+  api,
+  readState: readSyncState,
+  writeState: writeSyncState,
+});
+
+// Revision for If-Match, best-effort from the pull cache (backend tolerates a
+// missing header, so null simply means "no precondition").
+async function cachedRevision(taskId) {
+  try {
+    const state = await readSyncState();
+    return (state.tasks ?? []).find((t) => t?.id === taskId)?.revision ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Enqueue a task op, flush immediately when online, pull after a push so the
+// cache (and any UI reading it) converges. Mirrors archived background.js:
+// conflicts are kept as history entries + surfaced via notification.
+async function enqueueAndSync(op) {
+  const queued = await syncEngine.enqueue(op);
+  if (queued.dropped > 0) {
+    notify("⚠️ Stuđiô AI", `Hàng đợi đồng bộ đầy — đã bỏ ${queued.dropped} thao tác cũ nhất.`);
+  }
+  const result = await syncEngine.syncNow().catch(() => null);
+  if (result?.flushed?.conflicts > 0) {
+    notify(
+      "⚠️ Xung đột đồng bộ",
+      `${result.flushed.conflicts} thay đổi bị bản web mới hơn thay thế. Mở Lịch sử đồng bộ để xem/khôi phục.`
+    );
+  }
+  return { queued, ...result };
+}
 
 // Kích hoạt tính năng mở SidePanel khi bấm vào biểu tượng tiện ích
 chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true }).catch(() => {});
@@ -39,6 +105,9 @@ setupDailyReviewAlarm();
 
 // Heartbeat 1 phút để nhận diện bài giảng & âm thanh học tập
 chrome.alarms.create("companion-heartbeat", { periodInMinutes: 1 });
+
+// Pull nền 5 phút (kênh riêng — không gộp vào heartbeat để khỏi quá tải)
+chrome.alarms.create(SYNC_PULL_ALARM, { periodInMinutes: 5 });
 
 // Helper gửi Notification
 function notify(title, message, iconUrl = "icons/logo.png") {
@@ -178,6 +247,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     }
   } else if (alarm.name === "companion-heartbeat") {
     checkAudibleLectureTabs();
+  } else if (alarm.name === SYNC_PULL_ALARM) {
+    syncEngine.pull().catch(() => {});
   }
 });
 
@@ -582,6 +653,31 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return { tasks: Array.isArray(tasks) ? tasks : [] };
       } catch {}
       return { tasks: [] };
+    }
+
+    // ---- ĐỒNG BỘ OFFLINE-FIRST (sync:*) — mirror archived background.js ----
+    if (type === "sync:status") return syncEngine.status();
+    if (type === "sync:now") return syncEngine.syncNow();
+    if (type === "sync:conflicts") return syncEngine.conflicts();
+    if (type === "sync:retry-dead") return syncEngine.retryDead();
+    if (type === "sync:restore") return syncEngine.restore(request?.conflictId);
+    if (type === "sync:schedule") {
+      const state = await readSyncState();
+      return { events: state.schedule };
+    }
+    if (type === "sync:enqueue") {
+      const queued = await syncEngine.enqueue(request?.op ?? {});
+      // Đẩy ngay cho tươi (flush tự bỏ qua khi offline/chưa đăng nhập).
+      const flushed = await syncEngine.flush().catch(() => ({ ok: false }));
+      if (flushed?.pushed > 0) await syncEngine.pull().catch(() => {});
+      return { queued, flushed };
+    }
+
+    // Sidepanel vừa mở → pull để hội tụ với bản web (không flush ở đây;
+    // các thao tác ghi tự flush ngay lúc enqueue).
+    if (type === "companion:sidepanel-opened") {
+      const pulled = await syncEngine.pull().catch(() => ({ skipped: true }));
+      return { pulled };
     }
 
     // Tạo ghi chú nhanh từ Floating Scratchpad hoặc bôi đen chữ
