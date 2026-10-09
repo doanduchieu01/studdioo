@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const sidepanelSrc = fs.readFileSync(path.join(__dirname, "..", "sidepanel.js"), "utf8");
-const contentSrc = fs.readFileSync(path.join(__dirname, "..", "content.js"), "utf8");
+const contentSrc = fs.readFileSync(path.join(__dirname, "..", "content-taskpad.js"), "utf8");
 
 const PAYLOADS = ['"><svg onload=alert(1)>', '<img src=x onerror=alert(1)>'];
 
@@ -32,8 +32,8 @@ test("sidepanel escapeHtml escapes & < > \" '", () => {
   assert.equal(escapeHtml("a&b<c>d\"e'f"), "a&amp;b&lt;c&gt;d&quot;e&#39;f");
 });
 
-test("content.js has escapeHtml helper identical in behavior to sidepanel's", () => {
-  const escapeHtml = extractEscapeHtml(contentSrc, "content.js");
+test("content-taskpad.js has escapeHtml helper identical in behavior to sidepanel's", () => {
+  const escapeHtml = extractEscapeHtml(contentSrc, "content-taskpad.js");
   assert.equal(escapeHtml("&<>\"'"), "&amp;&lt;&gt;&quot;&#39;");
 });
 
@@ -61,12 +61,12 @@ test("sidepanel sync-history name render escapes fully (not just quotes)", () =>
   );
 });
 
-test("content.js widget escapes task/dropdown/subtask titles", () => {
+test("content-taskpad.js widget escapes task/dropdown/subtask titles", () => {
   for (const raw of ["${currentTask?.title}", "${t.title}", "${sub.title}"]) {
-    assert.ok(!contentSrc.includes(raw), `content.js must not contain raw ${raw}`);
+    assert.ok(!contentSrc.includes(raw), `content-taskpad.js must not contain raw ${raw}`);
   }
   // savedDraft lands inside <textarea> HTML context — must be escaped too.
-  assert.ok(!contentSrc.includes("${savedDraft}"), "content.js must not contain raw ${savedDraft}");
+  assert.ok(!contentSrc.includes("${savedDraft}"), "content-taskpad.js must not contain raw ${savedDraft}");
   assert.ok(contentSrc.includes("escapeHtml(savedDraft"), "scratchpad draft must go through escapeHtml");
   assert.ok(contentSrc.includes("escapeHtml(currentTask"), "hero/pill title must go through escapeHtml");
   assert.ok(contentSrc.includes("escapeHtml(t.title"), "dropdown title must go through escapeHtml");
@@ -75,7 +75,7 @@ test("content.js widget escapes task/dropdown/subtask titles", () => {
 
 test("replicated render output neutralizes stored-XSS payloads", () => {
   const escapeHtml = extractEscapeHtml(sidepanelSrc, "sidepanel.js");
-  const cEscape = extractEscapeHtml(contentSrc, "content.js");
+  const cEscape = extractEscapeHtml(contentSrc, "content-taskpad.js");
   for (const payload of PAYLOADS) {
     // Replicate each fixed render site's escaping contract.
     const sites = [

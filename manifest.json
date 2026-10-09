@@ -43,9 +43,13 @@
   "content_scripts": [
     {
       "matches": [
-        "<all_urls>"
+        "https://exe-studio.onrender.com/*",
+        "http://localhost:5173/*",
+        "http://127.0.0.1:5173/*",
+        "http://localhost:8000/*",
+        "http://127.0.0.1:8000/*"
       ],
-      "js": ["content.js"],
+      "js": ["content-auth.js"],
       "run_at": "document_idle"
     }
   ],

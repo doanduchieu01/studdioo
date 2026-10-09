@@ -7,6 +7,13 @@ import { createApiClient } from "./lib/api.js";
 import { createSyncEngine } from "./lib/sync-engine.js";
 import { newTaskId } from "./lib/task-sync.js";
 import { checkPageCapturable, isReadablePageUrl } from "./lib/page-capture.js";
+import {
+  ensureOptionalPermissions,
+  TASKPAD_INJECT_REQUEST,
+  LECTURE_DETECT_REQUEST,
+  TABS_QUERY_REQUEST,
+  NOTIFY_REQUEST,
+} from "./lib/permissions.js";
 
 const AUTH_KEY = "studioAuth";
 const TIMER_KEY = "studioTimer";
@@ -468,7 +475,7 @@ chrome.runtime.onMessageExternal?.addListener((request, sender, sendResponse) =>
   return true;
 });
 
-// Tab Stuđiô hợp lệ để nhận Auth Token: cùng quy tắc với content.js isStudioWebApp
+// Tab Stuđiô hợp lệ để nhận Auth Token: cùng quy tắc với content-auth.js isStudioWebApp
 function isStudioTabUrl(url) {
   try {
     const u = new URL(String(url ?? ""));
@@ -857,18 +864,71 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   return true;
 });
 
+// ---- INJECT TASKPAD THEO NHU CẦU (content-taskpad.js KHÔNG khai báo trong
+// manifest — background inject qua chrome.scripting ở lần trigger TaskPad đầu
+// tiên (Alt+S / Alt+N), sau khi xin scripting+host. tabId đã inject được nhớ
+// trong session storage để mỗi tab chỉ inject một lần mỗi phiên).
+const TASKPAD_INJECT_KEY = "studioTaskpadInjectedTabs";
+const TASKPAD_FILE = "content-taskpad.js";
+
+async function getInjectedTabs() {
+  try {
+    const data = await chrome.storage.session?.get(TASKPAD_INJECT_KEY);
+    const arr = data?.[TASKPAD_INJECT_KEY];
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+async function markTabInjected(tabId) {
+  try {
+    const injected = await getInjectedTabs();
+    if (!injected.includes(tabId)) {
+      injected.push(tabId);
+      await chrome.storage.session?.set({ [TASKPAD_INJECT_KEY]: injected });
+    }
+  } catch {}
+}
+
+// True khi TaskPad đã sẵn sàng trong tabId (đã inject trước đó hoặc vừa
+// inject xong). Giữ hành vi trước tách file: không bao giờ inject vào tab
+// Stuđiô (PART 2 cũ không chạy ở đó); trang hệ thống (chrome://) inject lỗi
+// thì im lặng bỏ qua, không crash.
+async function ensureTaskpadInjected(tabId, tabUrl) {
+  if (!tabId) return false;
+  if (isStudioTabUrl(tabUrl)) return false;
+  if ((await getInjectedTabs()).includes(tabId)) return true;
+  const granted = await ensureOptionalPermissions(chrome, TASKPAD_INJECT_REQUEST, () =>
+    notify(
+      "⚠️ Stuđiô AI • Cần quyền hiện TaskPad",
+      "Hãy bấm lại Alt+S / Alt+N rồi chọn “Cho phép” để TaskPad nổi trên trang này."
+    )
+  );
+  if (!granted) return false;
+  try {
+    await chrome.scripting?.executeScript({ target: { tabId }, files: [TASKPAD_FILE] });
+  } catch {
+    return false;
+  }
+  await markTabInjected(tabId);
+  return true;
+}
+
 // ---- PHÍM TẮT TOÀN CỤC (Alt+S: Bật/Tắt TaskPad, Alt+N: Ghi nhanh) ----
 if (chrome.commands) {
   chrome.commands.onCommand.addListener(async (command) => {
     try {
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tabs || tabs.length === 0 || !tabs[0].id) return;
-      const tabId = tabs[0].id;
+      const tab = tabs[0];
 
       if (command === "toggle-taskpad") {
-        chrome.tabs.sendMessage(tabId, { type: "taskpad:toggle" }).catch(() => {});
+        if (!(await ensureTaskpadInjected(tab.id, tab.url))) return;
+        chrome.tabs.sendMessage(tab.id, { type: "taskpad:toggle" }).catch(() => {});
       } else if (command === "quick-capture") {
-        chrome.tabs.sendMessage(tabId, { type: "taskpad:quick-capture" }).catch(() => {});
+        if (!(await ensureTaskpadInjected(tab.id, tab.url))) return;
+        chrome.tabs.sendMessage(tab.id, { type: "taskpad:quick-capture" }).catch(() => {});
       }
     } catch (e) {}
   });

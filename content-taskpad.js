@@ -1,7 +1,9 @@
 /**
- * Stuđiô AI Companion - Content Script
- * 1. Chạy trên web Stuđiô AI: Cầu nối phiên đăng nhập (Auth Bridge)
- * 2. Chạy trên TẤT CẢ CÁC TRANG WEB BÊN NGOÀI (Google, Wikipedia, Canvas, Coursera, Docs, Tin tức, PDF...):
+ * Stuđiô AI Companion - TaskPad Content Script (on-demand inject only).
+ * NOT declared in manifest.json: background.js injects this file via
+ * chrome.scripting on the first TaskPad trigger (Alt+S / Alt+N), after a
+ * just-in-time scripting+host permission grant. Runs on non-Studio pages,
+ * top frame only — the guards below are unchanged from the pre-split build.
  *    - In-Page Floating TaskPad Calm-Tech ghim việc & micro-sprint (0/3)
  *    - Bộ chuyển đổi nhanh nhiệm vụ (Task Switcher từ TickTick/Todoist)
  *    - Bong bóng bôi đen văn bản lưu tức thì (Inline Selection Bubble từ Glasp/Weava)
@@ -10,67 +12,14 @@
  *    - Phím tắt toàn cục (Alt+S: Bật/Tắt TaskPad, Alt+N: Ghi nhanh)
  */
 
-// Kiểm tra xem trang hiện tại có phải là Stuđiô AI Web App không
+// Trang Stuđiô không bao giờ nhận TaskPad (giữ nguyên hành vi trước tách file:
+// background cũng từ chối inject vào Studio tab, đây là lớp phòng thủ thứ hai).
 const isStudioWebApp =
   window.location.hostname.includes("exe-studio") ||
   (window.location.hostname === "localhost" && (window.location.port === "5173" || window.location.port === "8000")) ||
   (window.location.hostname === "127.0.0.1" && (window.location.port === "5173" || window.location.port === "8000"));
 
-// ================= PHẦN 1: CẦU NỐI ĐĂNG NHẬP (TRÊN WEB STUĐIÔ) =================
-if (isStudioWebApp) {
-  function sendAuthToExtension() {
-    try {
-      const accessToken = localStorage.getItem("studi_access_token");
-      const refreshToken = localStorage.getItem("studi_refresh_token");
-      const userRaw = localStorage.getItem("studi_user");
-      let user = null;
-      if (userRaw) {
-        try {
-          user = JSON.parse(userRaw);
-        } catch {}
-      }
-
-      if (accessToken) {
-        chrome.runtime.sendMessage({
-          type: "companion:auto-sync-auth",
-          payload: {
-            accessToken,
-            refreshToken,
-            user,
-            apiBase: window.location.origin,
-          },
-        }).catch(() => {});
-      }
-    } catch (e) {}
-  }
-
-  sendAuthToExtension();
-  setTimeout(sendAuthToExtension, 1000);
-  setTimeout(sendAuthToExtension, 3000);
-  setTimeout(sendAuthToExtension, 6000);
-
-  window.addEventListener("storage", sendAuthToExtension);
-
-  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request?.type === "content:get-auth") {
-      const accessToken = localStorage.getItem("studi_access_token");
-      const refreshToken = localStorage.getItem("studi_refresh_token");
-      const userRaw = localStorage.getItem("studi_user");
-      let user = null;
-      try {
-        user = userRaw ? JSON.parse(userRaw) : null;
-      } catch {}
-
-      sendResponse({
-        ok: true,
-        auth: accessToken ? { accessToken, refreshToken, user, apiBase: window.location.origin } : null,
-      });
-      return true;
-    }
-  });
-}
-
-// ================= PHẦN 2: SIÊU NĂNG LỰC FLOATING TRÊN MỌI TRANG WEB =================
+// ================= SIÊU NĂNG LỰC FLOATING TRÊN MỌI TRANG WEB =================
 if (!isStudioWebApp && window === window.top) {
   let isMinimized = localStorage.getItem("studio_taskpad_minimized") === "true";
   let isClosedForTab = false;
