@@ -1,1 +1,1 @@
-{"name": "studio-companion", "type": "module", "scripts": {"test": "node --test tests/*.test.js", "verify": "npm test"}}
+{"name": "studio-companion", "version": "1.0.0", "type": "module", "scripts": {"test": "node --test tests/*.test.js", "verify": "npm test && node scripts/audit.mjs"}}
