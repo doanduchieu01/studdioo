@@ -406,7 +406,7 @@ function renderTaskList() {
         </label>
         <div class="task-item-body">
           <div class="task-item-header-row">
-            <span class="task-item-title truncate" title="${task.title}">${task.title}</span>
+            <span class="task-item-title truncate" title="${escapeHtml(task.title)}">${escapeHtml(task.title)}</span>
             ${
               hasSubtasks
                 ? `<span class="subtask-badge-pill ${completedSprints === totalSprints ? "all-done" : ""}" data-toggle-subtasks="${task.id}" title="Xem/Thu gọn micro-sprint">🎯 ${completedSprints}/${totalSprints} ▾</span>`
@@ -435,7 +435,7 @@ function renderTaskList() {
                 <input type="checkbox" class="task-sub-check" data-task-id="${task.id}" data-sub-id="${sub.id}" ${sub.is_completed ? "checked" : ""} />
                 <span class="checkmark"></span>
               </label>
-              <span class="subtask-card-title truncate" title="${sub.title}">${sIdx + 1}. ${sub.title}</span>
+              <span class="subtask-card-title truncate" title="${escapeHtml(sub.title)}">${sIdx + 1}. ${escapeHtml(sub.title)}</span>
               <span class="subtask-mini-time">${sub.estimated_minutes || 25}p</span>
             </div>
           `
@@ -552,7 +552,7 @@ function pinTaskToHero(task) {
             <input type="checkbox" class="pinned-sub-check" data-sub-id="${sub.id}" ${sub.is_completed ? "checked" : ""} />
             <span class="checkmark"></span>
           </label>
-          <span class="pinned-subtask-name" title="${sub.title}">${idx + 1}. ${sub.title}</span>
+          <span class="pinned-subtask-name" title="${escapeHtml(sub.title)}">${idx + 1}. ${escapeHtml(sub.title)}</span>
           <span class="subtask-mini-time">${sub.estimated_minutes || 25}p</span>
         `;
 
@@ -807,7 +807,7 @@ function renderSyncCard() {
     const row = document.createElement("div");
     row.className = "sync-history-item";
     row.innerHTML = `
-      <div class="sync-history-name truncate" title="${name.replaceAll('"', "&quot;")}">${name}</div>
+      <div class="sync-history-name truncate" title="${escapeHtml(name)}">${escapeHtml(name)}</div>
       <span class="sync-history-meta">${item?.kind === "schedule" ? "Khối lịch" : "Việc"} · web v${item?.serverRevision ?? "—"}</span>
     `;
     const btn = document.createElement("button");
@@ -887,7 +887,7 @@ function renderNotesList() {
 
     item.innerHTML = `
       <div class="note-card-top">
-        <span class="note-card-title truncate" title="${note.title}">${note.title}</span>
+        <span class="note-card-title truncate" title="${escapeHtml(note.title)}">${escapeHtml(note.title)}</span>
         <button class="btn-task-action delete-note" data-id="${note.id}" title="Xóa ghi chú">🗑️</button>
       </div>
       <div class="note-card-content">${escapeHtml(note.content || "")}</div>
@@ -915,7 +915,12 @@ function renderNotesList() {
 }
 
 function escapeHtml(str) {
-  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return String(str ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 // Bắt mốc video từ tab hiện tại

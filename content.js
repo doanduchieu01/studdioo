@@ -82,6 +82,17 @@ if (!isStudioWebApp && window === window.top) {
   let availableTasks = [];
   let isTaskSwitcherOpen = false;
 
+  // Escape attacker-controlled titles before innerHTML interpolation (stored XSS).
+  // Intentionally duplicated from sidepanel.js; a shared copy is out of scope.
+  function escapeHtml(str) {
+    return String(str ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
   // ================= KHỞI TẠO FLOATING WIDGET =================
   async function initFloatingWidget() {
     if (isClosedForTab) return;
@@ -639,7 +650,7 @@ if (!isStudioWebApp && window === window.top) {
       <!-- 1. Pill Thu Gọn -->
       <div class="taskpad-pill" id="btnExpandPill" title="Bấm để mở TaskPad (Phím tắt: Alt+S)">
         <span class="pill-icon">🎯</span>
-        <span class="pill-title">${currentTask?.title || "Stuđiô TaskPad"}</span>
+        <span class="pill-title">${escapeHtml(currentTask?.title || "Stuđiô TaskPad")}</span>
         <span class="pill-badge">${completedSprints}/${totalSprints}</span>
         <span class="pill-shortcut">Alt+S</span>
       </div>
@@ -685,8 +696,8 @@ if (!isStudioWebApp && window === window.top) {
                   ? availableTasks
                       .map(
                         (t) => `
-                    <div class="task-dropdown-item ${t.id === currentTask?.id ? "active" : ""}" data-switch-id="${t.id}" title="${t.title}">
-                      ${t.title}
+                    <div class="task-dropdown-item ${t.id === currentTask?.id ? "active" : ""}" data-switch-id="${t.id}" title="${escapeHtml(t.title)}">
+                      ${escapeHtml(t.title)}
                     </div>
                   `
                       )
@@ -702,7 +713,7 @@ if (!isStudioWebApp && window === window.top) {
                 <span class="check-ring"></span>
               </label>
               <span class="focus-title ${currentTask?.status === "completed" ? "is-done" : ""}" id="heroTaskTitle">
-                ${currentTask?.title || "Chưa có việc nào được chọn"}
+                ${escapeHtml(currentTask?.title || "Chưa có việc nào được chọn")}
               </span>
             </div>
 
@@ -723,7 +734,7 @@ if (!isStudioWebApp && window === window.top) {
                           <input type="checkbox" class="subtask-checkbox" data-sub-id="${sub.id}" ${sub.is_completed ? "checked" : ""} />
                           <span class="check-ring"></span>
                         </label>
-                        <span class="subtask-text" title="${sub.title}">${idx + 1}. ${sub.title}</span>
+                        <span class="subtask-text" title="${escapeHtml(sub.title)}">${idx + 1}. ${escapeHtml(sub.title)}</span>
                         <span class="subtask-time">${sub.estimated_minutes || 25}p</span>
                       </div>
                     `
@@ -743,7 +754,7 @@ if (!isStudioWebApp && window === window.top) {
 
           <!-- TAB 2: SỔ TAY GHI CHÉP NHANH (NOTION STYLE) -->
           <div id="viewScratchpadContent" class="scratchpad-view">
-            <textarea id="scratchpadInput" class="scratchpad-area" placeholder="Ghi chép nhanh công thức, ý tưởng, tóm tắt bài học trên trang này...">${savedDraft}</textarea>
+            <textarea id="scratchpadInput" class="scratchpad-area" placeholder="Ghi chép nhanh công thức, ý tưởng, tóm tắt bài học trên trang này...">${escapeHtml(savedDraft)}</textarea>
             <div class="scratchpad-actions">
               <span class="scratchpad-hint" id="scratchpadStatus">Tự động lưu bản nháp</span>
               <button class="btn-save-scratchpad" id="btnSaveScratchpad">💾 Lưu vào Stuđiô</button>
