@@ -56,9 +56,14 @@ const ZIP_CODE = `
 import json, sys, zipfile
 sys.stdout.reconfigure(encoding="utf-8")
 spec = json.load(open(sys.argv[1], encoding="utf-8"))
+def canonical(p):
+    # Deterministic bytes across checkouts: Windows materializes CRLF,
+    # blobs store LF. Zip the LF form so any machine rebuilds the same zip.
+    with open(p, "rb") as f:
+        return f.read().replace(b"\\r\\n", b"\\n")
 with zipfile.ZipFile(spec["out"], "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
     for src, arc in spec["files"]:
-        z.write(src, arc)
+        z.writestr(arc, canonical(src))
 print("wrote %d entries" % len(spec["files"]))
 `;
 

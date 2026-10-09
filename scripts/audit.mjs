@@ -40,6 +40,12 @@ function walk(dir, out = []) {
 
 const rel = (f) => path.relative(EXT_DIR, f);
 
+// Canonical bytes for hashing: Windows checkouts materialize CRLF while
+// blobs (and zips built by pack.mjs) store LF. Compare the LF form so the
+// freshness check passes on any checkout settings. latin1 keeps binary
+// files (icons/) byte-deterministic on both sides.
+const canonical = (buf) => Buffer.from(Buffer.from(buf).toString("latin1").replace(/\r\n/g, "\n"), "latin1");
+
 // 1. manifest.json parses.
 let manifest = null;
 try {
@@ -170,7 +176,7 @@ out = {"names": [], "hashes": {}, "manifest_text": None}
 for n in z.namelist():
     if n.endswith("/"):
         continue
-    data = z.read(n)
+    data = z.read(n).replace(b"\\r\\n", b"\\n")
     out["names"].append(n)
     out["hashes"][n] = hashlib.sha256(data).hexdigest()
     if n == "manifest.json":
@@ -200,7 +206,7 @@ print(json.dumps(out))
         const expectedHashes = new Map();
         for (const f of expectedFiles) {
           const relPosix = path.relative(EXT_DIR, f).split(path.sep).join("/");
-          expectedHashes.set(relPosix, createHash("sha256").update(readFileSync(f)).digest("hex"));
+          expectedHashes.set(relPosix, createHash("sha256").update(canonical(readFileSync(f))).digest("hex"));
         }
         const raw = execFileSync(python, ["-c", ZIP_INSPECT, ZIP_PATH], {
           encoding: "utf8",
@@ -227,7 +233,7 @@ print(json.dumps(out))
               manifestDetail = `zipped manifest does not parse: ${err?.message ?? err}`;
             }
             if (zippedManifest) {
-              const diskText = readFileSync(path.join(EXT_DIR, "manifest.json"), "utf8");
+              const diskText = canonical(readFileSync(path.join(EXT_DIR, "manifest.json"))).toString("utf8");
               if (info.manifest_text !== diskText) {
                 // Content hash already flags this; add explicit version/content detail.
                 if (zippedManifest.version !== manifest.version) {
