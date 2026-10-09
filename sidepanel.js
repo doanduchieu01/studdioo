@@ -9,6 +9,23 @@
  */
 
 import { createApiClient } from "./lib/api.js";
+import {
+  ensureOptionalPermissions,
+  TASKPAD_INJECT_REQUEST,
+  TABS_QUERY_REQUEST,
+} from "./lib/permissions.js";
+
+// scripting/tabs/host là optional: xin ở lần dùng đầu (mốc video, trích
+// bôi đen, quét tab Studio); bị từ chối thì rẽ vào catch/alert sẵn có.
+async function ensurePageScriptAccess() {
+  try {
+    const tabsOk = await ensureOptionalPermissions(chrome, TABS_QUERY_REQUEST, null);
+    if (!tabsOk) return false;
+    return ensureOptionalPermissions(chrome, TASKPAD_INJECT_REQUEST, null);
+  } catch {
+    return false;
+  }
+}
 
 // Single HTTP transport: Bearer token + 401 -> refresh -> retry.
 // Payloads/URLs unchanged; the token is re-read from the store per request.
@@ -99,6 +116,7 @@ async function checkCurrentWebTab() {
 // Kiểm tra video đang phát trên tab
 async function checkVideoPlaybackOnTab(tabId) {
   try {
+    await ensurePageScriptAccess().catch(() => false);
     const res = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
@@ -200,6 +218,7 @@ async function scanTabsAuth(showFeedback = true) {
   }
 
   try {
+    await ensurePageScriptAccess().catch(() => false);
     const tabs = await chrome.tabs.query({});
     const studioTabs = tabs.filter((t) =>
       t.url && (
@@ -925,6 +944,7 @@ function escapeHtml(str) {
 
 // Bắt mốc video từ tab hiện tại
 async function handleGrabVideoTimestamp() {
+  await ensurePageScriptAccess().catch(() => false);
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tabs || tabs.length === 0) return;
   const tab = tabs[0];
@@ -975,6 +995,7 @@ async function handleGrabVideoTimestamp() {
 
 // Bắt đoạn chữ đang bôi đen trên trang web
 async function handleGrabSelection() {
+  await ensurePageScriptAccess().catch(() => false);
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tabs || tabs.length === 0) return;
   const tab = tabs[0];

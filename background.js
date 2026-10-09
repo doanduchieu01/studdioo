@@ -150,19 +150,33 @@ chrome.alarms.create("companion-heartbeat", { periodInMinutes: 1 });
 // Pull nền 5 phút (kênh riêng — không gộp vào heartbeat để khỏi quá tải)
 chrome.alarms.create(SYNC_PULL_ALARM, { periodInMinutes: 5 });
 
-// Helper gửi Notification
+// Helper gửi Notification ("notifications" là optional: lần nhắc đầu tiên xin
+// quyền; bị từ chối thì bỏ qua lặng lẽ — caller đã có toast/UI riêng nên
+// không crash và không spam lỗi). Trả về promise để test có thể await.
 function notify(title, message, iconUrl = "icons/logo.png") {
-  chrome.notifications.create({
-    type: "basic",
-    iconUrl,
-    title,
-    message,
-    priority: 2,
-    silent: false,
-  });
+  if (!chrome.notifications?.create) return Promise.resolve(false);
+  return ensureOptionalPermissions(chrome, NOTIFY_REQUEST, null)
+    .then((granted) => {
+      if (!granted) return false;
+      return chrome.notifications
+        .create({
+          type: "basic",
+          iconUrl,
+          title,
+          message,
+          priority: 2,
+          silent: false,
+        })
+        .then(() => true)
+        .catch(() => false);
+    })
+    .catch(() => false);
 }
 
-// Đăng ký Context Menus cho thao tác trực tiếp trên mọi trang web
+// Đăng ký Context Menus cho thao tác trực tiếp trên mọi trang web.
+// contextMenus GIỮ ở base permissions (không optional): menu chuột phải
+// page/selection là mặt kích hoạt cốt lõi — Chrome chỉ hiện menu khi quyền
+// đã granted từ lúc cài, đưa vào optional sẽ giấu tính năng đến lần dùng đầu.
 function setupContextMenus() {
   if (!chrome.contextMenus) return;
   try {
@@ -368,10 +382,13 @@ async function recordActivityMinutes(focusMins = 0, lectureMins = 0) {
   await chrome.storage.local.set({ [ACTIVITY_KEY]: data });
 }
 
-// Kiểm tra tab phát video bài giảng
+// Kiểm tra tab phát video bài giảng ("tabs"/"idle" là optional: xin quyền ở
+// lần lecture-detect đầu tiên; bị từ chối thì bỏ qua lặng lẽ, không crash).
 const LECTURE_DOMAINS = ["youtube.com", "coursera.org", "udemy.com", "edx.org", "ted.com", "notion.so"];
 async function checkAudibleLectureTabs() {
   try {
+    const granted = await ensureOptionalPermissions(chrome, LECTURE_DETECT_REQUEST, null);
+    if (!granted) return;
     const tabs = await chrome.tabs.query({ audible: true });
     for (const tab of tabs) {
       const url = tab.url || "";
@@ -381,7 +398,7 @@ async function checkAudibleLectureTabs() {
       }
     }
   } catch {
-    // Quyền tabs là optional
+    // Quyền optional bị từ chối / API vắng mặt: bỏ qua lặng lẽ
   }
 }
 
@@ -532,6 +549,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // Quét chủ động các tab Stuđiô đang mở để lấy Auth Token
     if (type === "companion:scan-tabs-auth") {
       try {
+        // "tabs" là optional: xin ở lần quét đầu; bị từ chối thì trả về
+        // "không tìm thấy" như cũ (không crash).
+        await ensureOptionalPermissions(chrome, TABS_QUERY_REQUEST, null);
         const tabs = await chrome.tabs.query({});
         const studioTabs = tabs.filter((t) =>
           t.url && (
@@ -622,6 +642,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         throw new Error("Vui lòng đồng bộ tài khoản Stuđiô AI trước khi thu thập trang.");
       }
 
+      // "tabs" là optional: xin ở lần capture đầu; bị từ chối thì url trống
+      // và gate bên dưới từ chối kèm toast rõ ràng (không crash).
+      await ensureOptionalPermissions(chrome, TABS_QUERY_REQUEST, null);
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
       const currentTab = tabs[0];
       if (!currentTab?.url) throw new Error("Không thể đọc tab hiện tại.");
@@ -953,9 +976,11 @@ if (chrome.omnibox) {
     try {
       // Đính kèm tab đang đọc làm nguồn (chỉ khi là trang http(s) đọc được;
       // tab hệ thống → vẫn tạo task theo chữ đã gõ, nhưng không lưu source).
+      // "tabs" là optional: bị từ chối thì bỏ qua source, vẫn tạo task.
       let sourceUrl = "";
       let sourceTitle = "";
       try {
+        await ensureOptionalPermissions(chrome, TABS_QUERY_REQUEST, null);
         const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
         const tab = tabs?.[0];
         if (tab?.url && isReadablePageUrl(tab.url)) {

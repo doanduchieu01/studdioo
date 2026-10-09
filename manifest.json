@@ -7,16 +7,19 @@
   "permissions": [
     "activeTab",
     "alarms",
-    "notifications",
     "sidePanel",
     "storage",
+    "contextMenus"
+  ],
+  "optional_permissions": [
     "tabs",
     "scripting",
     "idle",
-    "contextMenus"
+    "notifications"
   ],
-  "host_permissions": [
-    "<all_urls>"
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
   ],
   "background": {
     "service_worker": "background.js",
