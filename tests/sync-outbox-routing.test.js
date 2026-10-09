@@ -135,3 +135,47 @@ test("context-menu page-task creates via outbox (exactly one POST online)", asyn
   assert.match(posts[0].body.id ?? "", /^[0-9a-f-]{36}$/i, "menu create must carry a client UUID");
   assert.equal(server.tasks.size, 1);
 });
+
+test("create-task default source is backend-accepted (no more 422 sink)", async (t) => {
+  // Hoi quy: default tung la "floating_widget" ma backend Literal khong nhan.
+  const server = { tasks: new Map() };
+  const seen = [];
+  const h = await boot(t, { fetchImpl: onlineServer(server, seen) });
+  const res = await h.sendInternal(
+    { type: "companion:create-task", payload: { title: "Khong source" } },
+    SELF
+  );
+  assert.equal(res.ok, true, JSON.stringify(res));
+  const posts = seen.filter((c) => c.method === "POST" && c.url === `${API}/api/v1/tasks/`);
+  assert.equal(posts.length, 1);
+  assert.ok(
+    ["manual", "capture", "gemini", "extension"].includes(posts[0].body.source),
+    `source phai backend chap nhan, nhan: ${posts[0].body.source}`
+  );
+  assert.equal(server.tasks.size, 1, "task phai toi server, khong rot vao dead");
+});
+
+test("internal studi:start-timer creates the alarm and timer row (no more fake timer)", async (t) => {
+  // Hoi quy S2: TaskPad gui studi:start-timer noi bo nhung khong co case -> roi qua null.
+  const h = await boot(t, {});
+  const res = await h.sendInternal(
+    { type: "studi:start-timer", payload: { durationMinutes: 25, taskTitle: "Hoc bai" } },
+    SELF
+  );
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.data?.success, true);
+  assert.ok(
+    h.__sent.some((s) => s.kind === "alarms.create" && s.name === "pomodoro-timer"),
+    "phai tao alarm pomodoro-timer"
+  );
+  const timer = h.localMap.get("studioTimer");
+  assert.equal(timer?.isRunning, true);
+  assert.equal(timer?.durationMinutes, 25);
+  const stop = await h.sendInternal({ type: "studi:stop-timer" }, SELF);
+  assert.equal(stop.ok, true, JSON.stringify(stop));
+  assert.ok(
+    h.__sent.some((s) => s.kind === "alarms.clear" && s.name === "pomodoro-timer"),
+    "phai clear alarm khi stop"
+  );
+  assert.equal(h.localMap.get("studioTimer")?.isRunning, false);
+});

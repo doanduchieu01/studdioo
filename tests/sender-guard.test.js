@@ -65,3 +65,47 @@ test("(d) onMessageExternal ping from allowed Studio origin still works", async 
   assert.equal(res.ok, true);
   assert.equal(res.data?.installed, true);
 });
+
+test("(e) manual logout blocks auto-sync and scan until next explicit login", async (t) => {
+  const h = await boot(t);
+  const studio = { id: "test-companion", tab: { url: "http://localhost:5173/app" } };
+  const good = {
+    type: "companion:auto-sync-auth",
+    payload: { accessToken: "GOOD", refreshToken: "R", user: { id: "u1" }, apiBase: "http://localhost:5173" },
+  };
+  await h.sendInternal({ type: "companion:logout" }, { id: "test-companion" });
+  assert.equal(h.localMap.has("studioAuth"), false);
+  const blocked = await h.sendInternal(good, studio);
+  assert.equal(blocked.ok, true);
+  assert.equal(blocked.data?.success, false, "auto-sync phai bi chan sau logout tay");
+  assert.equal(h.localMap.has("studioAuth"), false, "khong luu auth khi bi chan");
+  const scan = await h.sendInternal({ type: "companion:scan-tabs-auth" }, { id: "test-companion" });
+  assert.equal(scan.data?.success, false, "scan-tabs cung bi chan");
+  // Login tay mo lai cua.
+  h.localMap.set("studioManualLogoutAt", Date.now() - 6 * 60 * 1000);
+  const reopened = await h.sendInternal(good, studio);
+  assert.equal(reopened.data?.success, true);
+  assert.equal(h.localMap.get("studioAuth")?.accessToken, "GOOD");
+});
+
+test("(f) apiBase chuan hoa giong web: 127/localhost -> cung host port 8000", async (t) => {
+  const h = await boot(t);
+  const from127 = await h.sendInternal(
+    {
+      type: "companion:auto-sync-auth",
+      payload: { accessToken: "T", refreshToken: "R", user: { id: "u1" }, apiBase: "http://127.0.0.1:5173" },
+    },
+    { id: "test-companion", tab: { url: "http://127.0.0.1:5173/app" } }
+  );
+  assert.equal(from127.data?.success, true);
+  assert.equal(h.localMap.get("studioAuth")?.apiBase, "http://127.0.0.1:8000");
+  const fromLocal = await h.sendInternal(
+    {
+      type: "companion:auto-sync-auth",
+      payload: { accessToken: "T2", refreshToken: "R", user: { id: "u1" }, apiBase: "http://localhost:5173" },
+    },
+    { id: "test-companion", tab: { url: "http://localhost:5173/app" } }
+  );
+  assert.equal(fromLocal.data?.success, true);
+  assert.equal(h.localMap.get("studioAuth")?.apiBase, "http://localhost:8000");
+});

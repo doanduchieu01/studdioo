@@ -111,8 +111,11 @@ export function makeChrome(options = {}) {
         }
         return Promise.resolve(null);
       },
-      async create() {},
-      async clear() {
+      async create(name, info) {
+        __sent.push({ kind: "alarms.create", name, info: structuredClone(info ?? {}) });
+      },
+      async clear(name) {
+        __sent.push({ kind: "alarms.clear", name });
         return true;
       },
     },

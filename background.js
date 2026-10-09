@@ -19,6 +19,16 @@ const AUTH_KEY = "studioAuth";
 const TIMER_KEY = "studioTimer";
 const SETTINGS_KEY = "studioCompanionSettings";
 const ACTIVITY_KEY = "studioActivityToday";
+// Cờ logout tay: chặn cầu auth tự động (auto-sync/scan-tabs) trong 1 lúc để
+// logout không tự đăng nhập lại khi còn tab web mở. Login tay/xác thực lại xóa cờ.
+const MANUAL_LOGOUT_KEY = "studioManualLogoutAt";
+const MANUAL_LOGOUT_TTL_MS = 5 * 60 * 1000;
+
+async function freshManualLogout() {
+  const saved = await chrome.storage.local.get(MANUAL_LOGOUT_KEY);
+  const at = saved?.[MANUAL_LOGOUT_KEY];
+  return typeof at === "number" && Date.now() - at < MANUAL_LOGOUT_TTL_MS;
+}
 
 // Sync outbox pull-cache: minimal local mirror {tasks:[], schedule:[]} holding
 // RAW server records. Display + merge base only — never user-edited directly.
@@ -402,6 +412,32 @@ async function checkAudibleLectureTabs() {
   }
 }
 
+// Timer Pomodoro dùng chung cho cả web (external) lẫn TaskPad/sidepanel (nội bộ).
+// Contract giữ nguyên: web chỉ gửi { durationMinutes, taskTitle }.
+// taskId là field TÙY CHỌN cho caller nào biết task context — vắng thì phiên
+// báo cáo không kèm task_id.
+async function startPomodoroTimer(payload = {}) {
+  const { durationMinutes = 25, taskTitle = "", taskId = null } = payload || {};
+  chrome.alarms.create("pomodoro-timer", { delayInMinutes: durationMinutes });
+  await chrome.storage.local.set({
+    [TIMER_KEY]: {
+      isRunning: true,
+      durationMinutes,
+      taskTitle,
+      taskId: typeof taskId === "string" && taskId ? taskId : null,
+      startTime: Date.now(),
+    },
+  });
+  notify("⏱️ Bắt đầu phiên tập trung", `Đang đếm giờ ${durationMinutes} phút${taskTitle ? ` cho "${taskTitle}"` : ""}. Bạn có thể an tâm tắt tab!`);
+  return { success: true };
+}
+
+async function stopPomodoroTimer() {
+  chrome.alarms.clear("pomodoro-timer");
+  await chrome.storage.local.set({ [TIMER_KEY]: { isRunning: false } });
+  return { success: true };
+}
+
 // ---- CẦU NỐI VỚI WEBSITE STUĐIÔ AI (onMessageExternal) ----
 const ALLOWED_ORIGINS = [
   "https://exe-studio.onrender.com",
@@ -438,8 +474,10 @@ chrome.runtime.onMessageExternal?.addListener((request, sender, sendResponse) =>
       const { accessToken, refreshToken, user, apiBase } = request.payload || {};
       if (accessToken) {
         await chrome.storage.local.set({
-          [AUTH_KEY]: { accessToken, refreshToken, user, apiBase: apiBase || DEFAULT_API_BASE },
+          [AUTH_KEY]: { accessToken, refreshToken, user, apiBase: normalizeApiBase(apiBase) },
         });
+        // Login xác thực trên web -> xóa cờ logout tay để cầu tự động chạy lại.
+        await chrome.storage.local.remove(MANUAL_LOGOUT_KEY);
         return { success: true, message: "Đã đồng bộ phiên đăng nhập vào Extension." };
       }
       return { success: false, message: "Thiếu accessToken." };
@@ -451,31 +489,14 @@ chrome.runtime.onMessageExternal?.addListener((request, sender, sendResponse) =>
       return { success: true };
     }
 
-    // 4. Bật chuông báo hẹn giờ tập trung từ Web
-    // Contract giữ nguyên: web chỉ gửi { durationMinutes, taskTitle }.
-    // taskId là field TÙY CHỌN cho caller nào biết task context (sidepanel/
-    // TaskPad tương lai) — vắng thì phiên báo cáo không kèm task_id.
+    // 4. Bật chuông báo hẹn giờ tập trung từ Web (dùng chung hàm với nội bộ)
     if (type === "studi:start-timer") {
-      const { durationMinutes = 25, taskTitle = "", taskId = null } = request.payload || {};
-      chrome.alarms.create("pomodoro-timer", { delayInMinutes: durationMinutes });
-      await chrome.storage.local.set({
-        [TIMER_KEY]: {
-          isRunning: true,
-          durationMinutes,
-          taskTitle,
-          taskId: typeof taskId === "string" && taskId ? taskId : null,
-          startTime: Date.now(),
-        },
-      });
-      notify("⏱️ Bắt đầu phiên tập trung", `Đang đếm giờ ${durationMinutes} phút${taskTitle ? ` cho "${taskTitle}"` : ""}. Bạn có thể an tâm tắt tab!`);
-      return { success: true };
+      return startPomodoroTimer(request.payload);
     }
 
     // 5. Hủy chuông báo
     if (type === "studi:stop-timer") {
-      chrome.alarms.clear("pomodoro-timer");
-      await chrome.storage.local.set({ [TIMER_KEY]: { isRunning: false } });
-      return { success: true };
+      return stopPomodoroTimer();
     }
 
     // 6. Test chuông báo thử nghiệm
@@ -491,6 +512,19 @@ chrome.runtime.onMessageExternal?.addListener((request, sender, sendResponse) =>
 
   return true;
 });
+
+// Quy tắc apiBase PHẢI giống resolveApiBase phía web (services/extension.js):
+// dev (localhost/127.0.0.1, mọi port) -> cùng host port 8000; web prod ->
+// cùng origin; còn lại mặc định prod. Chuẩn hóa lúc NHẬN để 2 đường
+// (explicit từ web / auto từ tab) không bao giờ vênh nhau.
+function normalizeApiBase(raw) {
+  try {
+    const u = new URL(String(raw ?? ""));
+    if (u.hostname === "localhost" || u.hostname === "127.0.0.1") return `http://${u.hostname}:8000`;
+    if (u.hostname.includes("exe-studio")) return u.origin;
+  } catch { /* bỏ qua, dùng mặc định dưới */ }
+  return DEFAULT_API_BASE;
+}
 
 // Tab Stuđiô hợp lệ để nhận Auth Token: cùng quy tắc với content-auth.js isStudioWebApp
 function isStudioTabUrl(url) {
@@ -532,13 +566,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     // Tự động nhận diện Auth Token từ Content Script gửi về
     if (type === "companion:auto-sync-auth") {
+      if (await freshManualLogout()) {
+        return { success: false, message: "Vừa đăng xuất thủ công — bỏ qua đồng bộ tự động." };
+      }
       const { accessToken, refreshToken, user, apiBase } = request.payload || {};
       if (accessToken) {
         const authData = {
           accessToken,
           refreshToken,
           user: user || { full_name: "Sinh viên Stuđiô", email: "chau.nguyen@vnuhcm.edu.vn" },
-          apiBase: apiBase || DEFAULT_API_BASE,
+          apiBase: normalizeApiBase(apiBase),
         };
         await chrome.storage.local.set({ [AUTH_KEY]: authData });
         return { success: true, message: "Đã tự động đồng bộ auth từ content script." };
@@ -548,6 +585,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     // Quét chủ động các tab Stuđiô đang mở để lấy Auth Token
     if (type === "companion:scan-tabs-auth") {
+      if (await freshManualLogout()) {
+        return { success: false, message: "Vừa đăng xuất thủ công — bỏ qua quét tab." };
+      }
       try {
         // "tabs" là optional: xin ở lần quét đầu; bị từ chối thì trả về
         // "không tìm thấy" như cũ (không crash).
@@ -588,7 +628,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 accessToken: data.accessToken,
                 refreshToken: data.refreshToken,
                 user: user || { full_name: "Sinh viên Stuđiô", email: "chau.nguyen@vnuhcm.edu.vn" },
-                apiBase: data.origin || DEFAULT_API_BASE,
+                apiBase: normalizeApiBase(data.origin),
               };
               await chrome.storage.local.set({ [AUTH_KEY]: authData });
               return { success: true, auth: authData, tabTitle: tab.title };
@@ -612,6 +652,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           email: "chau.nguyen@vnuhcm.edu.vn",
           apiBase,
         });
+        await chrome.storage.local.remove(MANUAL_LOGOUT_KEY);
         return { success: true, auth: authData };
       } catch (err) {
         throw new Error(err?.message || "Không thể đăng nhập tài khoản mẫu.");
@@ -623,16 +664,27 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const { email, password, apiBase = DEFAULT_API_BASE } = request.payload || {};
       try {
         const authData = await api.loginWithPassword({ email, password, apiBase });
+        await chrome.storage.local.remove(MANUAL_LOGOUT_KEY);
         return { success: true, auth: authData };
       } catch (err) {
         throw new Error(err?.message || "Email hoặc mật khẩu không chính xác.");
       }
     }
 
-    // Đăng xuất khỏi Extension
+    // Đăng xuất khỏi Extension (đặt cờ chặn cầu tự động 1 lúc)
     if (type === "companion:logout") {
       await chrome.storage.local.remove(AUTH_KEY);
+      await chrome.storage.local.set({ [MANUAL_LOGOUT_KEY]: Date.now() });
       return { success: true };
+    }
+
+    // Timer nội bộ (TaskPad/sidepanel) — cùng hàm với cầu web, trước đây rơi
+    // qua khe (không có case) nên hẹn giờ chạy giả.
+    if (type === "studi:start-timer") {
+      return startPomodoroTimer(request.payload);
+    }
+    if (type === "studi:stop-timer") {
+      return stopPomodoroTimer();
     }
 
     // Thu thập nhanh trang web hiện tại thành Task
@@ -796,7 +848,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             description: description || "Ghi nhanh từ Floating TaskPad",
             priority: priority || "high",
             duration_minutes: duration_minutes ?? 25,
-            source: source || "floating_widget",
+            source: source || "capture",
             ...(source_url ? { source_url } : {}),
             ...(source_title ? { source_title } : {}),
           },

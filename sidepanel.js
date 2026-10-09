@@ -343,10 +343,14 @@ async function handleManualLogin(e) {
   }
 }
 
-// Đăng xuất
+// Đăng xuất (qua background để đặt cờ chặn cầu tự động; rớt thì xóa local trực tiếp)
 async function handleLogout() {
   if (!confirm("Bạn có chắc muốn đăng xuất khỏi tiện ích?")) return;
-  await chrome.storage.local.remove("studioAuth");
+  try {
+    await chrome.runtime.sendMessage({ type: "companion:logout" });
+  } catch {
+    await chrome.storage.local.remove("studioAuth");
+  }
   currentAuth = null;
   allTasks = [];
   allNotes = [];

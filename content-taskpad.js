@@ -852,22 +852,30 @@ if (!isStudioWebApp && window === window.top) {
       });
     });
 
-    // Thêm việc nhanh
+    // Thêm việc nhanh — chỉ xóa ô nhập khi server/outbox đã nhận (tránh mất chữ + báo giả).
     const submitQuick = () => {
       const val = quickTaskInput?.value?.trim();
       if (!val) return;
-      quickTaskInput.value = "";
-
+      btnQuickTaskSubmit.disabled = true;
       chrome.runtime.sendMessage({
         type: "companion:create-task",
         payload: { title: val, description: `Tạo từ trang: ${document.title} (${window.location.href})` },
       }).then((res) => {
-        if (res?.data?.task) {
+        btnQuickTaskSubmit.disabled = false;
+        if (res?.ok && res?.data?.task) {
+          quickTaskInput.value = "";
           currentTask = res.data.task;
           chrome.storage.local.set({ studioPinnedTask: res.data.task });
           renderWidget();
+        } else {
+          // Giữ nguyên chữ đã gõ + báo lỗi thật thay vì im lặng.
+          quickTaskInput.value = val;
+          quickTaskInput.title = res?.error || "Không tạo được việc. Thử lại sau.";
         }
-      }).catch(() => {});
+      }).catch(() => {
+        btnQuickTaskSubmit.disabled = false;
+        if (quickTaskInput) quickTaskInput.value = val;
+      });
     };
 
     quickTaskInput?.addEventListener("keydown", (e) => {
@@ -1098,12 +1106,20 @@ if (!isStudioWebApp && window === window.top) {
           title: selectedTextCache.slice(0, 100),
           description: `Trích từ: ${document.title}\nURL: ${window.location.href}`,
         },
-      }).then(() => {
-        btnTask.textContent = "✓ Đã tạo!";
-        setTimeout(() => {
-          host.style.display = "none";
-          btnTask.textContent = "📌 + Tạo việc";
-        }, 1200);
+      }).then((res) => {
+        if (res?.ok) {
+          btnTask.textContent = "✓ Đã tạo!";
+          setTimeout(() => {
+            host.style.display = "none";
+            btnTask.textContent = "📌 + Tạo việc";
+          }, 1200);
+        } else {
+          btnTask.textContent = "⚠️ Lỗi, thử lại";
+          setTimeout(() => { btnTask.textContent = "📌 + Tạo việc"; }, 2000);
+        }
+      }).catch(() => {
+        btnTask.textContent = "⚠️ Lỗi, thử lại";
+        setTimeout(() => { btnTask.textContent = "📌 + Tạo việc"; }, 2000);
       });
     });
 
@@ -1117,12 +1133,20 @@ if (!isStudioWebApp && window === window.top) {
       chrome.runtime.sendMessage({
         type: "companion:create-note",
         payload: { title, content },
-      }).then(() => {
-        btnNote.textContent = "✓ Đã lưu!";
-        setTimeout(() => {
-          host.style.display = "none";
-          btnNote.textContent = "📝 + Ghi chú";
-        }, 1200);
+      }).then((res) => {
+        if (res?.ok) {
+          btnNote.textContent = "✓ Đã lưu!";
+          setTimeout(() => {
+            host.style.display = "none";
+            btnNote.textContent = "📝 + Ghi chú";
+          }, 1200);
+        } else {
+          btnNote.textContent = "⚠️ Lỗi, thử lại";
+          setTimeout(() => { btnNote.textContent = "📝 + Ghi chú"; }, 2000);
+        }
+      }).catch(() => {
+        btnNote.textContent = "⚠️ Lỗi, thử lại";
+        setTimeout(() => { btnNote.textContent = "📝 + Ghi chú"; }, 2000);
       });
     });
   }
