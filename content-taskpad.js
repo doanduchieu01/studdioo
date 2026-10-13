@@ -15,6 +15,8 @@
 // Trang Stuđiô không bao giờ nhận TaskPad (giữ nguyên hành vi trước tách file:
 // background cũng từ chối inject vào Studio tab, đây là lớp phòng thủ thứ hai).
 const isStudioWebApp =
+  window.location.hostname === "studio-6179.duckdns.org" ||
+  window.location.hostname === "chau-studio.duckdns.org" ||
   window.location.hostname.includes("exe-studio") ||
   (window.location.hostname === "localhost" && (window.location.port === "5173" || window.location.port === "8000")) ||
   (window.location.hostname === "127.0.0.1" && (window.location.port === "5173" || window.location.port === "8000"));

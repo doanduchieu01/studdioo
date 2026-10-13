@@ -17,6 +17,8 @@ const read = (f) => fs.readFileSync(path.join(EXT, f), "utf8");
 const manifest = () => JSON.parse(read("manifest.json"));
 
 const NARROW_MATCHES = [
+  "https://studio-6179.duckdns.org/*",
+  "https://chau-studio.duckdns.org/*",
   "https://exe-studio.onrender.com/*",
   "http://localhost:5173/*",
   "http://127.0.0.1:5173/*",

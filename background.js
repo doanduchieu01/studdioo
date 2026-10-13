@@ -37,8 +37,8 @@ const TASK_CACHE_KEY = "studioTaskCache";
 // Dedicated pull alarm (NOT the 1-min companion-heartbeat — avoid overloading it).
 const SYNC_PULL_ALARM = "sync-pull";
 
-// API Base ưu tiên Render Production hoặc Local
-const DEFAULT_API_BASE = "https://exe-studio.onrender.com";
+// API Base ưu tiên VPS Production (DuckDNS) hoặc Local
+const DEFAULT_API_BASE = "https://studio-6179.duckdns.org";
 
 // Single HTTP transport: every backend call goes through this client
 // (Bearer token + 401 -> refresh -> retry). Payloads/URLs unchanged.
@@ -440,6 +440,8 @@ async function stopPomodoroTimer() {
 
 // ---- CẦU NỐI VỚI WEBSITE STUĐIÔ AI (onMessageExternal) ----
 const ALLOWED_ORIGINS = [
+  "https://studio-6179.duckdns.org",
+  "https://chau-studio.duckdns.org",
   "https://exe-studio.onrender.com",
   "http://localhost:5173",
   "http://127.0.0.1:5173",
@@ -522,6 +524,7 @@ function normalizeApiBase(raw) {
     const u = new URL(String(raw ?? ""));
     if (u.hostname === "localhost" || u.hostname === "127.0.0.1") return `http://${u.hostname}:8000`;
     if (u.hostname.includes("exe-studio")) return u.origin;
+    if (u.hostname === "studio-6179.duckdns.org" || u.hostname === "chau-studio.duckdns.org") return u.origin;
   } catch { /* bỏ qua, dùng mặc định dưới */ }
   return DEFAULT_API_BASE;
 }
@@ -531,6 +534,7 @@ function isStudioTabUrl(url) {
   try {
     const u = new URL(String(url ?? ""));
     if (u.hostname.includes("exe-studio")) return true;
+    if (u.hostname === "studio-6179.duckdns.org" || u.hostname === "chau-studio.duckdns.org") return true;
     if (
       (u.hostname === "localhost" || u.hostname === "127.0.0.1") &&
       (u.port === "5173" || u.port === "8000")
